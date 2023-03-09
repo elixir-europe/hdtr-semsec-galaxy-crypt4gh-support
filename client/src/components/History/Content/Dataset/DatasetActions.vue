@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { faBug, faChartBar, faInfoCircle, faLink, faRedo, faSitemap } from "@fortawesome/free-solid-svg-icons";
+import axios from "axios";
+
+import { faBug, faChartBar, faInfoCircle, faLink, faRedo, faSitemap, faKey} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { BButton } from "bootstrap-vue";
 import { computed } from "vue";
@@ -12,7 +14,10 @@ import { absPath, prependPath } from "@/utils/redirect";
 
 import type { ItemUrls } from ".";
 
+import { useHistoryStore } from "@/stores/historyStore";
+import {setAttributes} from "@/components/DatasetInformation/services";
 import DatasetDownload from "@/components/History/Content/Dataset/DatasetDownload.vue";
+import { getAppRoot } from "@/onload/loadConfig";
 
 interface Props {
     item: HDADetailed;
@@ -29,6 +34,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits(["toggleHighlights"]);
 
 const router = useRouter();
+const historyStore = useHistoryStore();
 
 const showDownloads = computed(() => {
     return !props.item.purged && ["ok", "failed_metadata", "error"].includes(props.item.state);
@@ -41,6 +47,16 @@ const showInfo = computed(() => {
 });
 const showVisualizations = computed(() => {
     return !props.item.purged && ["ok", "failed_metadata", "error"].includes(props.item.state);
+});
+
+const showRecrypt = computed(() => {
+    return (
+        props.item.extension == "c4gh" &&
+        props.item.state != "error" &&
+        props.item.state != "failed_metadata" &&
+        props.item.state != "upload" &&
+        props.item.state != "noPermission"
+    );
 });
 const showRerun = computed(() => {
     return props.item.accessible && props.item.rerunnable && props.item.creating_job && props.item.state != "upload";
@@ -89,6 +105,33 @@ function onVisualize() {
 function onRerun() {
     router.push(`/root?job_id=${props.item.creating_job}`);
 }
+
+async function onRecrypt() {
+    try {
+        let recryptResponse = await axios.post("https://localhost:61357/recrypt_header", {
+            crypt4gh_header: props.item.metadata_crypt4gh_header,
+        });
+
+        let copyHdaResponse = await axios.post(`${getAppRoot()}api/histories/${props.item.history_id}/contents/datasets`, {
+            source: "hda",
+            content: props.item.id,
+        })
+
+        let editHdaResponse = await axios.put(`${getAppRoot()}api/histories/${props.item.history_id}/contents/datasets/${copyHdaResponse.data.id}`, {
+            tags: ["Recrypted_for_compute", recryptResponse.data.crypt4gh_compute_keypair_id],
+            metadata: {
+              ...recryptResponse.data
+            }
+        })
+
+        let datatypeDetectResponse = await setAttributes(copyHdaResponse.data.id, {}, "autodetect")
+
+        historyStore.loadCurrentHistory();
+    } catch (err) {
+        console.error(JSON.stringify(err, Object.getOwnPropertyNames(err)));
+    }
+}
+
 </script>
 
 <template>
@@ -165,6 +208,17 @@ function onRerun() {
                     :href="rerunUrl"
                     @click.prevent.stop="onRerun">
                     <FontAwesomeIcon :icon="faRedo" />
+                </BButton>
+
+                <BButton
+                    v-if="showRecrypt"
+                    v-g-tooltip.hover
+                    class="px-1"
+                    title="Recrypt Crypt4GH-encrypted dataset"
+                    size="sm"
+                    variant="link"
+                    @click.prevent.stop="onRecrypt">
+                    <FontAwesomeIcon :icon="faKey" />
                 </BButton>
             </div>
         </div>
