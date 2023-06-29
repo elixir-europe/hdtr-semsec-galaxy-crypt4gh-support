@@ -114,6 +114,7 @@
       <display file="igb/bigwig.xml"/>
       <display file="igv/bigwig.xml"/>
     </datatype>
+    <datatype extension="c4gh" type="galaxy.datatypes.binary:Crypt4ghEncryptedArchive" display_in_upload="true"/>
     <datatype extension="cxb" type="galaxy.datatypes.binary:Binary" mimetype="application/octet-stream" subclass="true" display_in_upload="true" description="Cuffquant output format"/>
     <datatype extension="chrint" type="galaxy.datatypes.interval:ChromatinInteractions" display_in_upload="true">
       <converter file="interval_to_bgzip_converter.xml" target_datatype="bgzip"/>
@@ -1251,6 +1252,7 @@
     <sniffer type="galaxy.datatypes.interval:ScIdx"/>
     <sniffer type="galaxy.datatypes.tabular:Vcf"/>
     <sniffer type="galaxy.datatypes.binary:JP2"/>
+    <sniffer type="galaxy.datatypes.binary:Crypt4ghEncryptedArchive"/>
     <sniffer type="galaxy.datatypes.binary:TwoBit"/>
     <sniffer type="galaxy.datatypes.binary:GeminiSQLite"/>
     <sniffer type="galaxy.datatypes.binary:SQmass"/>

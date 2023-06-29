@@ -14,7 +14,9 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from base64 import b64encode, b64decode
 from collections.abc import Iterable
+from datetime import datetime
 from json import dumps
 from typing import (
     Any,
@@ -604,6 +606,206 @@ class CompressedOMEZarrZipArchive(CompressedZarrZipArchive):
             if file.endswith(expected_meta_file_name):
                 return file
         return None
+
+
+class Crypt4ghEncryptedArchive(Binary):
+    file_ext = "c4gh"
+    check_required_metadata = True
+
+    CRYPT4GH_MAGIC_NUMBER_AND_VERSION = b'crypt4gh' + int.to_bytes(1, length=4, byteorder='little')
+
+    MetadataElement(
+        name="crypt4gh_header",
+        default="",
+        desc="Header of a Crypt4GH-encrypted dataset, extracted from start of dataset, encoded with base64. "
+             "The header in this metadata field should be used instead of the header in the beginning of "
+             "the data file itself. This allows for modification of the header for e.g. recryption without "
+             "having to change the dataset contents. ",
+        param=MetadataParameter,
+        readonly=False,
+        visible=False,
+        optional=False,
+        no_value="",
+    )
+
+    MetadataElement(
+        name="crypt4gh_dataset_header_sha256",
+        default="",
+        desc="SHA-256 checksum of the header as stored in the beginning of the dataset file itself.",
+        param=MetadataParameter,
+        readonly=True,
+        visible=True,
+        optional=False,
+        no_value="",
+    )
+
+    MetadataElement(
+        name="crypt4gh_metadata_header_sha256",
+        default="",
+        desc="SHA-256 checksum of the header as stored in the 'crypt4gh_header' metadata field.",
+        param=MetadataParameter,
+        readonly=True,
+        visible=True,
+        optional=False,
+        no_value="",
+    )
+
+    MetadataElement(
+        name="crypt4gh_compute_keypair_id",
+        default="",
+        desc="Unique identifier of the corresponding keypair at the compute node (retained for both analysis input and "
+             "output datasets).",
+        param=MetadataParameter,
+        readonly=False,
+        visible=False,
+        optional=True,
+        no_value="",
+    )
+
+    MetadataElement(
+        name="crypt4gh_compute_keypair_expiration_date",
+        default="",
+        desc="Date and time of expiration of the corresponding keypair at the compute node, in ISO 8610 format "
+             "(retained for both analysis input and output datasets).",
+        param=MetadataParameter,
+        readonly=False,
+        visible=False,
+        optional=True,
+        no_value="",
+    )
+
+    def set_peek(self, dataset: DatasetProtocol, **kwd) -> None:
+        if not dataset.dataset.purged:
+            peek_lines = ["Crypt4GH encrypted dataset"]
+            keypair_id = getattr(dataset.metadata, "crypt4gh_compute_keypair_id", None)
+
+            if self._is_recrypted(dataset):
+                peek_lines.append("Recrypted to allow decryption at compute node")
+                peek_lines.append("Metadata header overrides header in dataset")
+            elif keypair_id:
+                peek_lines.append("Encrypted to allow de/recryption by user")
+
+            if keypair_id:
+                peek_lines.append(f"Compute keypair id: {keypair_id}")
+
+            keypair_exp_date = getattr(dataset.metadata, "crypt4gh_compute_keypair_expiration_date", None)
+            if keypair_exp_date:
+                peek_lines.append(f"Compute keypair expires: {keypair_exp_date}")
+
+            dataset.peek = os.linesep.join(peek_lines)
+            dataset.blurb = nice_size(dataset.get_size())
+        else:
+            dataset.peek = "file does not exist"
+            dataset.blurb = "file purged from disk"
+
+    def display_peek(self, dataset: DatasetProtocol) -> str:
+        try:
+            return dataset.peek
+        except Exception:
+            return f"Crypt4GH encrypted dataset ({nice_size(dataset.get_size())})"
+
+    def sniff_prefix(self, file_prefix: FilePrefix) -> bool:
+        starts_with_magic_number_and_version = file_prefix.startswith_bytes(self.CRYPT4GH_MAGIC_NUMBER_AND_VERSION)
+        if not starts_with_magic_number_and_version:
+            return False
+
+        file_stream = io.BytesIO(file_prefix.contents_header_bytes)
+        header = self._read_and_validate_crypt4gh_header(file_stream)
+        has_crypt4gh_data = self._has_encrypted_data(header, file_prefix.file_size)
+
+        file_stream.close()
+
+        return has_crypt4gh_data
+
+    def set_meta(self, dataset: DatasetProtocol, overwrite: bool = True,
+                 crypt4gh_header: Optional[bytes] = None,
+                 crypt4gh_compute_keypair_id: Optional[str] = None,
+                 crypt4gh_compute_keypair_expiration_date: Optional[datetime] = None, **kwd) -> None:
+        super().set_meta(dataset=dataset, overwrite=overwrite, **kwd)
+
+        try:
+            from galaxy.util.hash_util import sha256
+
+            with open(dataset.get_file_name(), "rb") as f:
+                dataset_header = self._read_and_validate_crypt4gh_header(f)
+
+            has_crypt4gh_data = self._has_encrypted_data(dataset_header, dataset.get_size())
+            if not has_crypt4gh_data:
+                raise ValueError("File has Crypt4GH header but no encrypted data")
+
+            prev_metadata_header = getattr(dataset.metadata, "crypt4gh_header", None)
+
+            if crypt4gh_header:
+                metadata_header_stream = io.BytesIO(crypt4gh_header)
+                metadata_header = self._read_and_validate_crypt4gh_header(metadata_header_stream)
+            elif prev_metadata_header:
+                metadata_header = b64decode(prev_metadata_header)
+            else:
+                metadata_header = dataset_header
+
+            sha256_dataset_header = sha256(dataset_header).hexdigest()
+            sha256_metadata_header = sha256(metadata_header).hexdigest()
+
+            dataset.metadata.crypt4gh_header = b64encode(metadata_header)
+            dataset.metadata.crypt4gh_metadata_header_sha256 = sha256_metadata_header
+            dataset.metadata.crypt4gh_dataset_header_sha256 = sha256_dataset_header
+
+            if crypt4gh_compute_keypair_id:
+                dataset.metadata.crypt4gh_compute_keypair_id = crypt4gh_compute_keypair_id
+            else:
+                prev_keypair_id = getattr(dataset.metadata, "crypt4gh_compute_keypair_id", None)
+                dataset.metadata.crypt4gh_compute_keypair_id = prev_keypair_id if prev_keypair_id else ""
+
+            if crypt4gh_compute_keypair_expiration_date:
+                dataset.metadata.crypt4gh_compute_keypair_expiration_date = \
+                    crypt4gh_compute_keypair_expiration_date.isoformat()
+            else:
+                prev_exp_date = getattr(dataset.metadata, "crypt4gh_compute_keypair_expiration_date", None)
+                dataset.metadata.crypt4gh_compute_keypair_expiration_date = prev_exp_date if prev_exp_date else ""
+
+            if bool(dataset.metadata.crypt4gh_compute_keypair_id) \
+                    ^ bool(dataset.metadata.crypt4gh_compute_keypair_expiration_date):
+                raise ValueError(
+                    f"Metadata fields 'crypt4gh_compute_keypair_id' "
+                    f"({dataset.metadata.crypt4gh_compute_keypair_id}) and "
+                    f"'crypt4gh_compute_keypair_expiration_date' "
+                    f"({dataset.metadata.crypt4gh_compute_keypair_expiration_date}) "
+                    "must be provided together.")
+
+        except Exception:
+            dataset.metadata.crypt4gh_header = ""
+            dataset.metadata.crypt4gh_metadata_header_sha256 = ""
+            dataset.metadata.crypt4gh_dataset_header_sha256 = ""
+            dataset.metadata.crypt4gh_compute_keypair_id = ""
+            dataset.metadata.crypt4gh_compute_keypair_expiration_date = ""
+            raise
+
+    def _read_and_validate_crypt4gh_header(self, stream) -> bytes:
+        header = b""
+
+        prefix_bytes = stream.read(16)
+        if prefix_bytes[0:12] != self.CRYPT4GH_MAGIC_NUMBER_AND_VERSION:
+            raise ValueError("Unable to read Crypt4GH header. Not a Crypt4GH dataset")
+        header += prefix_bytes
+
+        header_packet_count = int.from_bytes(prefix_bytes[12:16], byteorder="little")
+        for i in range(header_packet_count):
+            packet_length = int.from_bytes(stream.read(4), byteorder="little")
+            stream.seek(-4, os.SEEK_CUR)
+            packet_bytes = stream.read(packet_length)
+            header += packet_bytes
+
+        return header
+
+    @staticmethod
+    def _has_encrypted_data(header: bytes, file_size: int):
+        return len(header) < file_size
+
+    @staticmethod
+    def _is_recrypted(dataset: DatasetProtocol):
+        metadata_header_sha256 = getattr(dataset.metadata, "crypt4gh_metadata_header_sha256", None)
+        dataset_header_sha256 = getattr(dataset.metadata, "crypt4gh_dataset_header_sha256", None)
+        return metadata_header_sha256 and dataset_header_sha256 and metadata_header_sha256 != dataset_header_sha256
 
 
 class GenericAsn1Binary(Binary):
