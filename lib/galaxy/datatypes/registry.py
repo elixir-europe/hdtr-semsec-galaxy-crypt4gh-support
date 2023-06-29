@@ -713,7 +713,8 @@ class Registry:
 
     def is_extension_unsniffable_binary(self, ext):
         datatype = self.get_datatype_by_extension(ext)
-        return datatype is not None and isinstance(datatype, binary.Binary) and not hasattr(datatype, "sniff")
+        return datatype is not None and isinstance(datatype, binary.Binary) and \
+            not any(hasattr(datatype, attr) for attr in ('sniff', 'sniff_prefix'))
 
     def get_datatype_class_by_name(self, name):
         """
