@@ -66,7 +66,7 @@
       <converter file="to_qname_sorted_bam.xml" target_datatype="qname_sorted.bam"/>
     </datatype>
     <datatype extension="probam" type="galaxy.datatypes.binary:ProBam" mimetype="application/octet-stream" display_in_upload="true"/>
-    <datatype extension="cram" type="galaxy.datatypes.binary:CRAM" mimetype="application/octet-stream" display_in_upload="true" description="CRAM is a file format for highly efficient and tunable reference-based compression of alignment data." description_url="http://www.ebi.ac.uk/ena/software/cram-usage">
+    <datatype extension="cram" auto_compressed_types="crypt4gh" type="galaxy.datatypes.binary:CRAM" mimetype="application/octet-stream" display_in_upload="true" description="CRAM is a file format for highly efficient and tunable reference-based compression of alignment data." description_url="http://www.ebi.ac.uk/ena/software/cram-usage">
         <infer_from suffix="cram" />
         <converter file="cram_to_bam_converter.xml" target_datatype="bam"/>
         <display file="igb/cram.xml"/>
@@ -165,7 +165,7 @@
     <datatype extension="data_manager_json" type="galaxy.datatypes.text:DataManagerJson" mimetype="application/json" subclass="true" display_in_upload="false"/>
     <datatype extension="dbn" type="galaxy.datatypes.sequence:DotBracket" display_in_upload="true" description="Dot-Bracket format is a text-based format for storing both an RNA sequence and its corresponding 2D structure." description_url="https://wiki.galaxyproject.org/Learn/Datatypes#Dbn"/>
     <datatype extension="fai" type="galaxy.datatypes.tabular:Tabular" display_in_upload="true" subclass="true" description="A Fasta Index File is a text file consisting of lines each with five TAB-delimited columns : Name, Length, offset, linebases, Linewidth" description_url="http://www.htslib.org/doc/faidx.html"/>
-    <datatype extension="fasta" auto_compressed_types="gz,bz2" type="galaxy.datatypes.sequence:Fasta" display_in_upload="true" description="A sequence in FASTA format consists of a single-line description, followed by lines of sequence data. The first character of the description line is a greater-than ('&gt;') symbol in the first column. All lines should be shorter than 80 characters." description_url="https://wiki.galaxyproject.org/Learn/Datatypes#Fasta">
+    <datatype extension="fasta" auto_compressed_types="gz,bz2,crypt4gh" type="galaxy.datatypes.sequence:Fasta" display_in_upload="true" description="A sequence in FASTA format consists of a single-line description, followed by lines of sequence data. The first character of the description line is a greater-than ('&gt;') symbol in the first column. All lines should be shorter than 80 characters." description_url="https://wiki.galaxyproject.org/Learn/Datatypes#Fasta">
       <infer_from suffix="fa" />
       <converter file="fasta_to_tabular_converter.xml" target_datatype="tabular"/>
       <converter file="fasta_to_bowtie_base_index_converter.xml" target_datatype="bowtie_base_index"/>
@@ -176,30 +176,30 @@
       <display file="igv/genome_fasta.xml" inherit="true"/>
     </datatype>
     <datatype extension="fastg" type="galaxy.datatypes.sequence:Fastg" display_in_upload="true" description="fastg format faithfully represents genome assemblies in the face of allelic polymorphism and assembly uncertainty" description_url="http://fastg.sourceforge.net/FASTG_Spec_v1.00.pdf"/>
-    <datatype extension="fastq" auto_compressed_types="gz,bz2" type="galaxy.datatypes.sequence:Fastq" display_in_upload="true" description="FASTQ format is a text-based format for storing both a biological sequence (usually nucleotide sequence) and its corresponding quality scores." description_url="https://wiki.galaxyproject.org/Learn/Datatypes#Fastq">
+    <datatype extension="fastq" auto_compressed_types="gz,bz2,crypt4gh" type="galaxy.datatypes.sequence:Fastq" display_in_upload="true" description="FASTQ format is a text-based format for storing both a biological sequence (usually nucleotide sequence) and its corresponding quality scores." description_url="https://wiki.galaxyproject.org/Learn/Datatypes#Fastq">
       <upload_warning>
         Generally a more specific fastq datatype should be specified, please consider selecting fastqsanger${auto_compressed_type} instead.
       </upload_warning>
       <converter file="fastq_to_fqtoc.xml" target_datatype="fqtoc"/>
     </datatype>
-    <datatype extension="fastqsanger" auto_compressed_types="gz,bz2" type="galaxy.datatypes.sequence:FastqSanger" display_in_upload="true" description="Sanger variant of the FASTQ format: phred+33">
+    <datatype extension="fastqsanger" auto_compressed_types="gz,bz2,crypt4gh" type="galaxy.datatypes.sequence:FastqSanger" display_in_upload="true" description="Sanger variant of the FASTQ format: phred+33">
       <infer_from suffix="fq" />
       <infer_from suffix="fastq" />
       <converter file="fastq_to_fqtoc.xml" target_datatype="fqtoc"/>
     </datatype>
-    <datatype extension="fastqsolexa" auto_compressed_types="gz,bz2" type="galaxy.datatypes.sequence:FastqSolexa" display_in_upload="true" description="Solexa variant of the FASTQ format: solexa+64" description_url="https://wiki.galaxyproject.org/Learn/Datatypes#FastqSolexa">
+    <datatype extension="fastqsolexa" auto_compressed_types="gz,bz2,crypt4gh" type="galaxy.datatypes.sequence:FastqSolexa" display_in_upload="true" description="Solexa variant of the FASTQ format: solexa+64" description_url="https://wiki.galaxyproject.org/Learn/Datatypes#FastqSolexa">
       <converter file="fastq_to_fqtoc.xml" target_datatype="fqtoc"/>
       <upload_warning>
         Sequencing data produced since February 2011 is generally using Sanger encoding. Please consider selecting fastqsanger${auto_compressed_type} instead.
       </upload_warning>
     </datatype>
-    <datatype extension="fastqcssanger" auto_compressed_types="gz,bz2" type="galaxy.datatypes.sequence:FastqCSSanger" display_in_upload="true" description="sequence in in color space phred scored quality values 0:93 represented by ASCII 33:126">
+    <datatype extension="fastqcssanger" auto_compressed_types="gz,bz2,crypt4gh" type="galaxy.datatypes.sequence:FastqCSSanger" display_in_upload="true" description="sequence in in color space phred scored quality values 0:93 represented by ASCII 33:126">
       <upload_warning>
         Color space data is rarely used in modern analyses, please consider selecting fastqsanger${auto_compressed_type} instead.
       </upload_warning>
       <converter file="fastq_to_fqtoc.xml" target_datatype="fqtoc"/>
     </datatype>
-    <datatype extension="fastqillumina" auto_compressed_types="gz,bz2" type="galaxy.datatypes.sequence:FastqIllumina" display_in_upload="true" description="Sanger variant of the FASTQ format: phred+64">
+    <datatype extension="fastqillumina" auto_compressed_types="gz,bz2,crypt4gh" type="galaxy.datatypes.sequence:FastqIllumina" display_in_upload="true" description="Sanger variant of the FASTQ format: phred+64">
       <converter file="fastq_to_fqtoc.xml" target_datatype="fqtoc"/>
       <upload_warning>
         Sequencing data produced since February 2011 is generally using Sanger encoding. Please consider selecting fastqsanger${auto_compressed_type} instead.
@@ -580,7 +580,7 @@
         <infer_from suffix="xsd" />
     </datatype>
     <datatype extension="dzi" type="galaxy.datatypes.xml:Dzi" mimetype="application/xml" display_in_upload="true"/>
-    <datatype extension="vcf" type="galaxy.datatypes.tabular:Vcf" display_in_upload="true">
+    <datatype extension="vcf" auto_compressed_types="crypt4gh" type="galaxy.datatypes.tabular:Vcf" display_in_upload="true">
         <infer_from suffix="vcf" />
         <converter file="interval_to_bgzip_converter.xml" target_datatype="bgzip"/>
         <converter file="vcf_to_vcf_bgzip_converter.xml" target_datatype="vcf_bgzip"/>

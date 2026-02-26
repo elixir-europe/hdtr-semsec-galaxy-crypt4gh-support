@@ -909,6 +909,11 @@ galaxy:
   # compressed datatypes will be unpacked before sniffing.
   #sniff_compressed_dynamic_datatypes_default: true
 
+  # Allow crypt4gh-compressed datatypes to match compatible plaintext
+  # tool inputs. Enable this only when crypt4gh transparent staging has
+  # been configured.
+  #enable_crypt4gh_transparent_staging: false
+
   # Disable the 'Auto-detect' option for file uploads
   #datatypes_disable_auto: false
 
@@ -3183,4 +3188,3 @@ galaxy:
   # Enable beta tool formats (yaml, cwl, ...) which is a prerequisite
   # for user defined tools.
   #enable_beta_tool_formats: false
-

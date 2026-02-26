@@ -790,6 +790,14 @@ mapping:
           With this option set to false the compressed datatypes will be unpacked
           before sniffing.
 
+      enable_crypt4gh_transparent_staging:
+        type: bool
+        default: false
+        required: false
+        desc: |
+          Allow crypt4gh-compressed datatypes to match compatible plaintext tool inputs.
+          This should only be enabled when crypt4gh input staging is configured.
+
       datatypes_disable_auto:
         type: bool
         default: false

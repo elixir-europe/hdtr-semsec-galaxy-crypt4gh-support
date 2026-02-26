@@ -138,6 +138,10 @@ class Registry:
 
         if root_dir and config:
             compressed_sniffers: dict[type[Data], list[Data]] = {}
+            enable_crypt4gh_transparent_staging = bool(
+                getattr(self.config, "enable_crypt4gh_transparent_staging", False)
+            )
+            crypt4gh_nested_targets: list[dict[str, Any]] = []
             if isinstance(config, (str, os.PathLike)):
                 # Parse datatypes_conf.xml
                 tree = galaxy.util.parse_xml(config)
@@ -372,6 +376,16 @@ class Registry:
                                 )
                             elif auto_compressed_type == "bz2":
                                 dynamic_parent = binary.Bz2DynamicCompressedArchive
+                            elif auto_compressed_type == "crypt4gh":
+                                dynamic_parent = binary.Crypt4GHDynamicCompressedArchive
+                                attributes["enable_crypt4gh_transparent_staging"] = (
+                                    enable_crypt4gh_transparent_staging
+                                )
+                                attributes["compressed_format"] = "crypt4gh"
+                                attributes["display_peek"] = binary.Crypt4GHDynamicCompressedArchive.display_peek
+                                attributes["set_meta"] = binary.Crypt4GHDynamicCompressedArchive.set_meta
+                                attributes["set_peek"] = binary.Crypt4GHDynamicCompressedArchive.set_peek
+                                attributes["sniff_prefix"] = binary.Crypt4GHDynamicCompressedArchive.sniff_prefix
                             else:
                                 raise ConfigurationError(f"Unknown auto compression type [{auto_compressed_type}]")
                             attributes["file_ext"] = compressed_extension
@@ -413,13 +427,33 @@ class Registry:
                                         compressed_extension,
                                     )
                                 )
-                            self.converters.append(
-                                (f"{auto_compressed_type}_to_uncompressed.xml", compressed_extension, extension)
-                            )
+                            elif auto_compressed_type == "bz2":
+                                self.converters.append(
+                                    (f"{auto_compressed_type}_to_uncompressed.xml", compressed_extension, extension)
+                                )
                             if datatype_class not in compressed_sniffers:
                                 compressed_sniffers[datatype_class] = []
                             if sniff_compressed_types:
                                 compressed_sniffers[datatype_class].append(compressed_datatype_instance)
+                            if auto_compressed_type in ("gz", "bz2") and "crypt4gh" in auto_compressed_types:
+                                crypt4gh_nested_targets.append(
+                                    {
+                                        "base_datatype_class": datatype_class,
+                                        "base_datatype_class_name": datatype_class_name,
+                                        "description": description,
+                                        "description_url": description_url,
+                                        "display_in_upload": display_in_upload,
+                                        "dynamic_parent": dynamic_parent,
+                                        "edam_data": edam_data,
+                                        "edam_format": edam_format,
+                                        "infer_from_suffixes": infer_from_suffixes,
+                                        "inner_auto_compressed_type": auto_compressed_type,
+                                        "inner_compressed_datatype_instance": compressed_datatype_instance,
+                                        "inner_extension": compressed_extension,
+                                        "sniff_compressed_types": sniff_compressed_types,
+                                        "upload_warning_template": upload_warning_template,
+                                    }
+                                )
                         # Processing the new datatype elem is now complete, so make sure the element defining it is retained by appending
                         # the new datatype to the in-memory list of datatype elems to enable persistence.
                         self.datatype_elems.append(elem)
@@ -433,6 +467,73 @@ class Registry:
                                         self.log.debug(
                                             f"Ignoring conflicting datatype with extension '{extension}' from {config}."
                                         )
+            for nested_target in crypt4gh_nested_targets:
+                base_datatype_class = nested_target["base_datatype_class"]
+                base_datatype_class_name = nested_target["base_datatype_class_name"]
+                description = nested_target["description"]
+                description_url = nested_target["description_url"]
+                display_in_upload = nested_target["display_in_upload"]
+                dynamic_parent = nested_target["dynamic_parent"]
+                edam_data = nested_target["edam_data"]
+                edam_format = nested_target["edam_format"]
+                infer_from_suffixes = nested_target["infer_from_suffixes"]
+                inner_auto_compressed_type = nested_target["inner_auto_compressed_type"]
+                inner_compressed_datatype_instance = nested_target["inner_compressed_datatype_instance"]
+                inner_extension = nested_target["inner_extension"]
+                sniff_compressed_types = nested_target["sniff_compressed_types"]
+                upload_warning_template = nested_target["upload_warning_template"]
+
+                crypt4gh_extension = f"{inner_extension}.crypt4gh"
+                if crypt4gh_extension in self.datatypes_by_extension:
+                    continue
+                attributes = {
+                    "file_ext": crypt4gh_extension,
+                    "compressed_format": "crypt4gh",
+                    "enable_crypt4gh_transparent_staging": enable_crypt4gh_transparent_staging,
+                    "uncompressed_datatype_instance": inner_compressed_datatype_instance,
+                    "display_peek": binary.Crypt4GHDynamicCompressedArchive.display_peek,
+                    "set_meta": binary.Crypt4GHDynamicCompressedArchive.set_meta,
+                    "set_peek": binary.Crypt4GHDynamicCompressedArchive.set_peek,
+                    "sniff_prefix": binary.Crypt4GHDynamicCompressedArchive.sniff_prefix,
+                }
+                crypt4gh_type_name = f"{base_datatype_class_name}{inner_auto_compressed_type.capitalize()}Crypt4gh"
+                compressed_datatype_class: type[Data] = type(
+                    crypt4gh_type_name,
+                    (
+                        base_datatype_class,
+                        dynamic_parent,
+                        binary.Crypt4GHDynamicCompressedArchive,
+                    ),
+                    attributes,
+                )
+                if edam_format:
+                    compressed_datatype_class.edam_format = edam_format
+                if edam_data:
+                    compressed_datatype_class.edam_data = edam_data
+                compressed_datatype_instance = compressed_datatype_class()
+                self.datatypes_by_extension[crypt4gh_extension] = compressed_datatype_instance
+                for suffix in infer_from_suffixes:
+                    self.datatypes_by_suffix_inferences[
+                        f"{suffix}.{inner_auto_compressed_type}.crypt4gh"
+                    ] = compressed_datatype_instance
+                if display_in_upload and crypt4gh_extension not in self.upload_file_formats:
+                    self.upload_file_formats.append(crypt4gh_extension)
+                self.datatype_info_dicts.append(
+                    {
+                        "display_in_upload": display_in_upload,
+                        "extension": crypt4gh_extension,
+                        "description": description,
+                        "description_url": description_url,
+                        "upload_warning": upload_warning(
+                            upload_warning_template, f"{inner_auto_compressed_type}.crypt4gh"
+                        ),
+                    }
+                )
+                if base_datatype_class not in compressed_sniffers:
+                    compressed_sniffers[base_datatype_class] = []
+                if sniff_compressed_types:
+                    compressed_sniffers[base_datatype_class].append(compressed_datatype_instance)
+
             # Load datatype sniffers from the config - we'll do this even if one or more datatypes were not properly processed in the config
             # since sniffers are not tightly coupled with datatypes.
             self.load_datatype_sniffers(
@@ -1057,10 +1158,15 @@ def upload_warning(template: Optional[Template], auto_compressed_type: Optional[
     return template.safe_substitute(template_args)
 
 
-def example_datatype_registry_for_sample(sniff_compressed_dynamic_datatypes_default=True):
+def example_datatype_registry_for_sample(
+    sniff_compressed_dynamic_datatypes_default: bool = True, enable_crypt4gh_transparent_staging: bool = False
+):
     galaxy_dir = galaxy.util.galaxy_directory()
     sample_conf = os.path.join(galaxy_dir, "lib", "galaxy", "config", "sample", "datatypes_conf.xml.sample")
-    config = Bunch(sniff_compressed_dynamic_datatypes_default=sniff_compressed_dynamic_datatypes_default)
+    config = Bunch(
+        sniff_compressed_dynamic_datatypes_default=sniff_compressed_dynamic_datatypes_default,
+        enable_crypt4gh_transparent_staging=enable_crypt4gh_transparent_staging,
+    )
     datatypes_registry = Registry(config)
     datatypes_registry.load_datatypes(root_dir=galaxy_dir, config=sample_conf)
     return datatypes_registry

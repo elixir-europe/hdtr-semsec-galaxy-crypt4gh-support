@@ -1,5 +1,6 @@
 """Binary classes"""
 
+import base64
 import binascii
 import gzip
 import io
@@ -383,8 +384,17 @@ class DynamicCompressedArchive(CompressedArchive):
                 and target_datatype.compressed_format == self.compressed_format
             ):
                 uncompressed_target_datatypes.append(target_datatype.uncompressed_datatype_instance)
+            elif self.compressed_format == "crypt4gh":
+                uncompressed_target_datatypes.append(target_datatype)
             else:
                 compressed_target_datatypes.append(target_datatype)
+
+        if (
+            self.compressed_format == "crypt4gh"
+            and getattr(self, "requires_staging", False)
+            and not getattr(self, "enable_crypt4gh_transparent_staging", False)
+        ):
+            return CompressedArchive().matches_any(compressed_target_datatypes)
 
         # TODO: Add gz and bz2 as proper datatypes and use those instances instead of
         # CompressedArchive() in the following check.
@@ -402,6 +412,59 @@ class GzDynamicCompressedArchive(DynamicCompressedArchive):
 
 class Bz2DynamicCompressedArchive(DynamicCompressedArchive):
     compressed_format = "bz2"
+
+
+class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
+    compressed_format = "crypt4gh"
+    compressed = True
+    requires_staging = True
+    enable_crypt4gh_transparent_staging = False
+
+    MetadataElement(
+        name="crypt4gh_header",
+        desc="Base64-encoded crypt4gh header (for re-encryption)",
+        readonly=True,
+        no_value=None,
+    )
+
+    def set_meta(self, dataset: DatasetProtocol, overwrite: bool = True, **kwd) -> None:
+        with open(dataset.get_file_name(), "rb") as f:
+            magic = f.read(8)
+            if magic != b"crypt4gh":
+                return
+            version = f.read(4)
+            if len(version) != 4:
+                return
+            header_length_bytes = f.read(4)
+            if len(header_length_bytes) != 4:
+                return
+            header_length = struct.unpack_from("<I", header_length_bytes)[0]
+            if header_length < 16:
+                return
+            f.seek(0)
+            header_bytes = f.read(header_length)
+        if len(header_bytes) != header_length:
+            return
+        dataset.metadata.crypt4gh_header = base64.b64encode(header_bytes).decode("ascii")
+
+    def set_peek(self, dataset: DatasetProtocol, **kwd) -> None:
+        if not dataset.dataset.purged:
+            inner_ext = self.file_ext.removesuffix(".crypt4gh")
+            dataset.peek = f"Crypt4GH encrypted {inner_ext} file"
+            dataset.blurb = nice_size(dataset.get_size())
+        else:
+            dataset.peek = "file does not exist"
+            dataset.blurb = "file purged from disk"
+
+    def display_peek(self, dataset: DatasetProtocol) -> str:
+        try:
+            return dataset.peek
+        except Exception:
+            inner_ext = self.file_ext.removesuffix(".crypt4gh")
+            return f"Crypt4GH encrypted {inner_ext} file ({nice_size(dataset.get_size())})"
+
+    def sniff_prefix(self, file_prefix: FilePrefix) -> bool:
+        return file_prefix.compressed_format == "crypt4gh"
 
 
 class CompressedZipArchive(CompressedArchive):
