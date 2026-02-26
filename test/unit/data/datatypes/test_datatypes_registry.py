@@ -1,5 +1,13 @@
+import base64
+import struct
+
 from galaxy.datatypes import sniff
 from galaxy.datatypes.registry import example_datatype_registry_for_sample
+from .util import (
+    MockDataset,
+    MockDatasetDataset,
+    get_input_files,
+)
 
 
 def test_matches_any():
@@ -114,3 +122,46 @@ def test_sniff_compressed_dynamic_datatypes_default_off():
     assert "fastq" not in sniff.guess_ext(fname, sniff_order)
     fname = sniff.get_test_fname("1.fastqsanger.bz2")
     assert "fastq" not in sniff.guess_ext(fname, sniff_order)
+
+
+def test_crypt4gh_dynamic_datatypes_registration_and_converters():
+    datatypes_registry = example_datatype_registry_for_sample()
+    assert "fastqsanger.crypt4gh" in datatypes_registry.datatypes_by_extension
+    assert "fastqsanger.gz.crypt4gh" in datatypes_registry.datatypes_by_extension
+    assert "fastqsanger.bz2.crypt4gh" in datatypes_registry.datatypes_by_extension
+
+    fastq_gz_crypt4gh = datatypes_registry.get_datatype_by_extension("fastqsanger.gz.crypt4gh")
+    assert fastq_gz_crypt4gh.uncompressed_datatype_instance.file_ext == "fastqsanger.gz"
+
+    converters_with_crypt4gh = [converter for converter in datatypes_registry.converters if "crypt4gh" in converter[0]]
+    assert converters_with_crypt4gh == []
+
+
+def test_crypt4gh_matches_any_staging_gate():
+    default_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=False)
+    fastqsanger = default_registry.get_datatype_by_extension("fastqsanger")
+    fastqsanger_crypt4gh = default_registry.get_datatype_by_extension("fastqsanger.crypt4gh")
+    assert not fastqsanger_crypt4gh.matches_any([fastqsanger])
+
+    staging_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
+    fastqsanger_staging = staging_registry.get_datatype_by_extension("fastqsanger")
+    fastqsanger_crypt4gh_staging = staging_registry.get_datatype_by_extension("fastqsanger.crypt4gh")
+    assert fastqsanger_crypt4gh_staging.matches_any([fastqsanger_staging])
+
+
+def test_crypt4gh_set_meta_stores_header_only():
+    datatypes_registry = example_datatype_registry_for_sample()
+    crypt4gh_datatype = datatypes_registry.get_datatype_by_extension("fastqsanger.crypt4gh")
+    with get_input_files("1.fastqsanger.crypt4gh") as input_files:
+        dataset = MockDataset(1)
+        dataset.set_file_name(input_files[0])
+        dataset.dataset = MockDatasetDataset(dataset.get_file_name())
+        crypt4gh_datatype.set_meta(dataset)
+
+    encoded_header = dataset.metadata.crypt4gh_header
+    header_bytes = base64.b64decode(encoded_header, validate=True)
+    assert header_bytes.startswith(b"crypt4gh")
+    header_length = struct.unpack_from("<I", header_bytes, 12)[0]
+    assert len(header_bytes) == header_length
+    assert not hasattr(dataset.metadata, "sequences")
+    assert not hasattr(dataset.metadata, "data_lines")

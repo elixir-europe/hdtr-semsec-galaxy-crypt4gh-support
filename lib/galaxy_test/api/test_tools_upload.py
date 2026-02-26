@@ -2,7 +2,10 @@ import json
 import os
 import tempfile
 import urllib.parse
-from base64 import b64encode
+from base64 import (
+    b64decode,
+    b64encode,
+)
 from typing import cast
 
 import pytest
@@ -181,6 +184,27 @@ class TestToolsUpload(ApiTestCase):
         assert details["state"] == "ok"
         assert details["file_ext"] == "fastqsanger.gz", details
         assert details["file_size"] == 161, details
+
+    @skip_without_datatype("fastqsanger.crypt4gh")
+    def test_upload_crypt4gh_retypes_uncompressed_selection(self):
+        fastqcrypt4gh_path = TestDataResolver().get_filename("1.fastqsanger.crypt4gh")
+        with open(fastqcrypt4gh_path, "rb") as fh:
+            details = self._upload_and_get_details(fh, file_type="fastqsanger")
+        assert details["state"] == "ok"
+        assert details["file_ext"] == "fastqsanger.crypt4gh", details
+        crypt4gh_header = details.get("metadata_crypt4gh_header")
+        assert crypt4gh_header
+        b64decode(crypt4gh_header, validate=True)
+        assert details.get("metadata_data_lines") in (None, 0)
+        assert details.get("metadata_sequences") in (None, 0)
+
+    @skip_without_datatype("fastqsanger.crypt4gh")
+    def test_upload_crypt4gh_auto_from_filename(self):
+        fastqcrypt4gh_path = TestDataResolver().get_filename("1.fastqsanger.crypt4gh")
+        with open(fastqcrypt4gh_path, "rb") as fh:
+            details = self._upload_and_get_details(fh, file_type="auto", name="1.fastqsanger.crypt4gh")
+        assert details["state"] == "ok"
+        assert details["file_ext"] == "fastqsanger.crypt4gh", details
 
     def test_upload_auto_decompress_off(self):
         # UNSTABLE_FLAG: This might default to a bed.gz datatype in the future.

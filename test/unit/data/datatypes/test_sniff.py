@@ -7,8 +7,10 @@ from galaxy.datatypes.sniff import (
     convert_newlines,
     convert_newlines_sep2tabs,
     convert_sep2tabs,
+    guess_ext_for_existing_dataset,
     get_test_fname,
 )
+from galaxy.util.checkers import is_crypt4gh
 
 
 def assert_converts_to_1234_convert_sep2tabs(content, expected="1\t2\n3\t4\n"):
@@ -109,3 +111,27 @@ def test_infer_from_filename():
     assert datatypes_registry.get_datatype_from_filename("mycool.fq").file_ext == "fastqsanger"
     assert datatypes_registry.get_datatype_from_filename("mycool.fq.gz").file_ext == "fastqsanger.gz"
     assert datatypes_registry.get_datatype_from_filename("mycool.fastq").file_ext == "fastqsanger"
+    assert datatypes_registry.get_datatype_from_filename("mycool.fastq.crypt4gh").file_ext == "fastqsanger.crypt4gh"
+    assert (
+        datatypes_registry.get_datatype_from_filename("mycool.fastq.gz.crypt4gh").file_ext
+        == "fastqsanger.gz.crypt4gh"
+    )
+
+
+def test_crypt4gh_detection():
+    crypt4gh_fname = get_test_fname("1.fastqsanger.crypt4gh")
+    plain_fastq_fname = get_test_fname("1.fastqsanger")
+    assert is_crypt4gh(crypt4gh_fname)
+    assert not is_crypt4gh(plain_fastq_fname)
+
+
+def test_guess_ext_for_existing_dataset_crypt4gh_uses_hints():
+    datatypes_registry = example_datatype_registry_for_sample()
+    crypt4gh_fname = get_test_fname("1.fastqsanger.crypt4gh")
+    assert (
+        guess_ext_for_existing_dataset(
+            crypt4gh_fname, datatypes_registry, dataset_name="uploaded.fastqsanger.crypt4gh"
+        )
+        == "fastqsanger.crypt4gh"
+    )
+    assert guess_ext_for_existing_dataset(crypt4gh_fname, datatypes_registry, dataset_name="uploaded") == "binary"
