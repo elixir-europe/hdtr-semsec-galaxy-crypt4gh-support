@@ -25,6 +25,13 @@ class HandleUploadResponse(NamedTuple):
     converted_spaces: bool
 
 
+def _uploaded_suffix_chain(name: str) -> str:
+    basename = os.path.basename(name).lower()
+    if "." not in basename:
+        return ""
+    return basename.split(".", 1)[1]
+
+
 def handle_upload(
     registry,
     path: str,  # dataset.path
@@ -69,7 +76,7 @@ def handle_upload(
                 tmp_dir=tmp_dir,
                 in_place=in_place,
                 check_content=check_content,
-                uploaded_file_ext=os.path.splitext(name)[1].lower().lstrip("."),
+                uploaded_file_ext=_uploaded_suffix_chain(name),
                 convert_to_posix_lines=convert_to_posix_lines,
                 convert_spaces_to_tabs=convert_spaces_to_tabs,
             )

@@ -235,7 +235,12 @@ def change_datatype(
         return
     if datatype == "auto":
         path = dataset_instance.dataset.get_file_name()
-        datatype = sniff.guess_ext(path, datatypes_registry.sniff_order)
+        datatype = sniff.guess_ext_for_existing_dataset(
+            path,
+            datatypes_registry,
+            dataset_name=getattr(dataset_instance, "name", None),
+            current_extension=getattr(dataset_instance, "extension", None),
+        )
     datatypes_registry.change_datatype(dataset_instance, datatype)
     sa_session.commit()
     set_metadata(hda_manager, ldda_manager, sa_session, dataset_id, model_class)

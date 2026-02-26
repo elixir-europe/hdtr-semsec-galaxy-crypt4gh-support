@@ -585,6 +585,25 @@ def guess_ext_from_file_name(fname, registry, requested_ext="auto"):
     return registry.get_datatype_from_filename(fname).file_ext
 
 
+def guess_ext_for_existing_dataset(
+    path: str,
+    registry,
+    *,
+    dataset_name: Optional[str] = None,
+    current_extension: Optional[str] = None,
+    auto_decompress: bool = True,
+) -> str:
+    file_prefix = FilePrefix(path, auto_decompress=auto_decompress)
+    if file_prefix.compressed_format == "crypt4gh":
+        for hint in (dataset_name, current_extension):
+            if hint:
+                inferred_ext = guess_ext_from_file_name(hint, registry)
+                if inferred_ext.endswith(".crypt4gh"):
+                    return inferred_ext
+        return "binary"
+    return guess_ext(file_prefix, registry.sniff_order, auto_decompress=auto_decompress)
+
+
 class FilePrefix:
     def __init__(self, filename, auto_decompress=True):
         non_utf8_error = None
@@ -801,6 +820,7 @@ def handle_compressed_file(
     tmp_dir: Optional[str] = None,
     in_place: bool = False,
     check_content: bool = True,
+    uploaded_file_ext: Optional[str] = None,
 ) -> HandleCompressedFileResponse:
     """
     Check uploaded files for compression, check compressed file contents, and uncompress if necessary.
@@ -831,15 +851,35 @@ def handle_compressed_file(
         compressed_type = file_prefix.compressed_format
     if is_compressed and is_valid:
         if ext in AUTO_DETECT_EXTENSIONS:
-            # attempt to sniff for a keep-compressed datatype (observing the sniff order)
-            sniff_datatypes = filter(lambda d: getattr(d, "compressed", False), datatypes_registry.sniff_order)
-            sniffed_ext = run_sniffers_raw(file_prefix, sniff_datatypes)
-            if sniffed_ext:
-                ext = sniffed_ext
+            crypt4gh_suffix_chain = uploaded_file_ext
+            if compressed_type == "crypt4gh" and not crypt4gh_suffix_chain:
+                file_basename = os.path.basename(file_prefix.filename).lower()
+                if "." in file_basename:
+                    crypt4gh_suffix_chain = file_basename.split(".", 1)[1]
+            if compressed_type == "crypt4gh" and crypt4gh_suffix_chain:
+                inferred_ext = datatypes_registry.get_datatype_from_filename(f"x.{crypt4gh_suffix_chain}").file_ext
+                if inferred_ext.endswith(".crypt4gh"):
+                    ext = inferred_ext
+                    keep_compressed = True
+            if compressed_type == "crypt4gh":
                 keep_compressed = True
+                if ext in AUTO_DETECT_EXTENSIONS:
+                    ext = "binary"
+            # attempt to sniff for a keep-compressed datatype (observing the sniff order)
+            if not keep_compressed and compressed_type != "crypt4gh":
+                sniff_datatypes = filter(lambda d: getattr(d, "compressed", False), datatypes_registry.sniff_order)
+                sniffed_ext = run_sniffers_raw(file_prefix, sniff_datatypes)
+                if sniffed_ext:
+                    ext = sniffed_ext
+                    keep_compressed = True
         else:
             datatype = datatypes_registry.get_datatype_by_extension(ext)
             keep_compressed = getattr(datatype, "compressed", False)
+            if compressed_type == "crypt4gh":
+                crypt4gh_ext = f"{ext}.crypt4gh"
+                if crypt4gh_ext in datatypes_registry.datatypes_by_extension:
+                    ext = crypt4gh_ext
+                keep_compressed = True
     # don't waste time decompressing if we sniff invalid contents
     if is_compressed and is_valid and file_prefix.auto_decompress and not keep_compressed:
         assert compressed_type  # Tell type checker is_compressed will only be true if compressed_type is also set.
@@ -914,6 +954,7 @@ def handle_uploaded_dataset_file_internal(
         tmp_dir=tmp_dir,
         in_place=in_place,
         check_content=check_content,
+        uploaded_file_ext=uploaded_file_ext,
     )
     converted_newlines = False
     converted_spaces = False

@@ -12,11 +12,11 @@ from galaxy import (
     web,
 )
 from galaxy.datatypes.data import DatatypeConverterNotFoundException
+from galaxy.datatypes import sniff
 from galaxy.datatypes.display_applications.util import (
     decode_dataset_user,
     encode_dataset_user,
 )
-from galaxy.datatypes.sniff import guess_ext
 from galaxy.exceptions import (
     InsufficientPermissionsException,
     MessageException,
@@ -371,7 +371,12 @@ class DatasetInterface(BaseUIController, UsesAnnotations, UsesItemRatings, UsesE
                     # we can't detect datatype if the dataset is not on disk
                     self.hda_manager.ensure_dataset_on_disk(trans, data)
                     path = data.dataset.get_file_name()
-                    datatype = guess_ext(path, trans.app.datatypes_registry.sniff_order)
+                    datatype = sniff.guess_ext_for_existing_dataset(
+                        path,
+                        trans.app.datatypes_registry,
+                        dataset_name=getattr(data, "name", None),
+                        current_extension=getattr(data, "extension", None),
+                    )
                     trans.app.datatypes_registry.change_datatype(data, datatype)
                     trans.sa_session.commit()
                     job, *_ = trans.app.datatypes_registry.set_external_metadata_tool.tool_action.execute(

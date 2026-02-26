@@ -550,7 +550,12 @@ class DatasetAssociationManager(
         self.ensure_can_set_metadata(dataset_assoc)
         assert dataset_assoc.dataset
         path = dataset_assoc.dataset.get_file_name()
-        datatype = sniff.guess_ext(path, self.app.datatypes_registry.sniff_order)
+        datatype = sniff.guess_ext_for_existing_dataset(
+            path,
+            self.app.datatypes_registry,
+            dataset_name=getattr(dataset_assoc, "name", None),
+            current_extension=getattr(dataset_assoc, "extension", None),
+        )
         self.app.datatypes_registry.change_datatype(dataset_assoc, datatype)
         session.commit()
         self.set_metadata(trans, dataset_assoc)
