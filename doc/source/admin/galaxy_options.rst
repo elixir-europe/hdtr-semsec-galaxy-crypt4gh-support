@@ -1087,6 +1087,47 @@
 :Type: bool
 
 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``enable_crypt4gh_transparent_staging``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Description:
+    Allow crypt4gh-compressed datatypes to match compatible plaintext
+    tool inputs. This should only be enabled when crypt4gh input
+    staging is configured.
+:Default: ``false``
+:Type: bool
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``crypt4gh_reencryption_service_url``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Description:
+    URL of the crypt4gh re-encryptor service user-mode endpoint.
+    Galaxy calls POST /recrypt_header on this URL to re-encrypt a
+    dataset's crypt4gh header for the destination compute node's key
+    pair. Example: "https://reencryptor.example.org" Required when
+    enable_crypt4gh_transparent_staging is true.
+:Default: ``None``
+:Type: str
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``crypt4gh_compute_key_config_path``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Description:
+    Default path to the crypt4ghfs key configuration file on compute
+    nodes. This file tells crypt4ghfs which private key to use when
+    mounting a staged crypt4gh file. Can be overridden per job
+    destination in job_conf.yml via the
+    "crypt4gh_compute_key_config_path" destination parameter. Required
+    when enable_crypt4gh_transparent_staging is true.
+:Default: ``None``
+:Type: str
+
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 ``datatypes_disable_auto``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -5936,6 +5977,3 @@
     for user defined tools.
 :Default: ``false``
 :Type: bool
-
-
-

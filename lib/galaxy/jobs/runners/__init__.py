@@ -34,6 +34,13 @@ from galaxy.job_execution.output_collect import (
     read_exit_code_from,
 )
 from galaxy.jobs.command_factory import build_command
+from galaxy.jobs.crypt4gh_staging import (
+    build_crypt4gh_post_commands,
+    build_crypt4gh_pre_commands,
+    JobPreparationException,
+    prepare_crypt4gh_input,
+    StagedCrypt4GHInput,
+)
 from galaxy.jobs.job_destination import JobDestination
 from galaxy.jobs.runners.util import runner_states
 from galaxy.jobs.runners.util.env import env_to_statement
@@ -322,7 +329,125 @@ class BaseJobRunner:
             job_wrapper.finish("", "")
             return False
 
+        # ── Phase 2: crypt4gh transparent staging ────────────────────────────
+        # If the Galaxy deployment has crypt4gh transparent staging enabled,
+        # iterate over input datasets and stage any crypt4gh-encrypted inputs.
+        # The staged files are FUSE-mounted by crypt4ghfs just before the tool
+        # command runs and unmounted immediately after.
+        try:
+            job_wrapper.runner_command_line = self._apply_crypt4gh_staging(
+                job_wrapper,
+                job_wrapper.runner_command_line,
+            )
+        except JobPreparationException as exc:
+            log.error("(%s) crypt4gh staging failed: %s", job_id, exc)
+            job_wrapper.fail(str(exc), exception=False)
+            return False
+
         return True
+
+    def _apply_crypt4gh_staging(self, job_wrapper: "MinimalJobWrapper", command_line: str) -> str:
+        """Wrap ``command_line`` with crypt4ghfs mount/unmount commands for any
+        crypt4gh-encrypted input datasets.
+
+        If ``enable_crypt4gh_transparent_staging`` is ``False`` in the Galaxy
+        config, or no input datasets use the crypt4gh format, the original
+        ``command_line`` is returned unchanged.
+
+        Parameters
+        ----------
+        job_wrapper:
+            The job wrapper for the job being prepared.
+        command_line:
+            The command line string already built by :meth:`build_command_line`.
+
+        Returns
+        -------
+        str
+            The (potentially wrapped) command line.
+
+        Raises
+        ------
+        JobPreparationException
+            If staging is enabled and fails for any input dataset.
+        """
+        if not getattr(job_wrapper.app.config, "enable_crypt4gh_transparent_staging", False):
+            return command_line
+
+        service_url: Optional[str] = getattr(job_wrapper.app.config, "crypt4gh_reencryption_service_url", None)
+        if not service_url:
+            raise JobPreparationException(
+                "enable_crypt4gh_transparent_staging is True but "
+                "crypt4gh_reencryption_service_url is not configured in galaxy.yml"
+            )
+
+        # Per-destination override, falls back to global config key.
+        key_config_path: Optional[str] = job_wrapper.get_destination_configuration(
+            "crypt4gh_compute_key_config_path",
+            getattr(job_wrapper.app.config, "crypt4gh_compute_key_config_path", None),
+        )
+        if not key_config_path:
+            raise JobPreparationException(
+                "enable_crypt4gh_transparent_staging is True but "
+                "crypt4gh_compute_key_config_path is not configured in galaxy.yml "
+                "or in the job destination params"
+            )
+        mount_timeout: int = int(
+            job_wrapper.get_destination_configuration(
+                "crypt4gh_mount_timeout",
+                getattr(job_wrapper.app.config, "crypt4gh_mount_timeout", 30),
+            )
+        )
+
+        # Collect all crypt4gh-encrypted inputs
+        staged_inputs: list[StagedCrypt4GHInput] = []
+        for dataset in job_wrapper.job_io.get_input_datasets():
+            compressed_fmt = getattr(getattr(dataset, "datatype", None), "compressed_format", None)
+            if compressed_fmt != "crypt4gh":
+                continue
+            log.info(
+                "(%s) Staging crypt4gh input dataset %s via re-encryptor service",
+                job_wrapper.get_id_tag(),
+                dataset.id,
+            )
+            staged = prepare_crypt4gh_input(
+                dataset=dataset,
+                reencryption_service_url=service_url,
+                working_directory=os.path.abspath(job_wrapper.working_directory),
+                key_config_path=key_config_path,
+            )
+            staged_inputs.append(staged)
+
+        if not staged_inputs:
+            return command_line
+
+        # The actual tool command lives inside tool_script.sh; command_line is
+        # just "bash /path/to/tool_script.sh".  Rewrite the dataset paths in
+        # the script file first so the tool sees the decrypted mounted paths.
+        tool_script_path = os.path.join(job_wrapper.working_directory, "tool_script.sh")
+        if os.path.exists(tool_script_path):
+            with open(tool_script_path) as _f:
+                script = _f.read()
+            for si in staged_inputs:
+                script = script.replace(si.original_dataset_path, si.mounted_path)
+            with open(tool_script_path, "w") as _f:
+                _f.write(script)
+        else:
+            # Fallback for runners that inline the command (no script file).
+            for si in staged_inputs:
+                command_line = command_line.replace(si.original_dataset_path, si.mounted_path)
+
+        # Wrap the runner command with mount/unmount shell snippets.
+        pre_cmds = build_crypt4gh_pre_commands(staged_inputs, mount_timeout=mount_timeout)
+        post_cmds = build_crypt4gh_post_commands(staged_inputs)
+        wrapped_command = (
+            f"{pre_cmds}\n"
+            f"{command_line}\n"
+            f"_CRYPT4GH_TOOL_EXIT=$?\n"
+            f"{post_cmds}\n"
+            f"exit $_CRYPT4GH_TOOL_EXIT"
+        )
+        return wrapped_command
 
     # Runners must override the job handling methods
     def queue_job(self, job_wrapper: "MinimalJobWrapper") -> None:

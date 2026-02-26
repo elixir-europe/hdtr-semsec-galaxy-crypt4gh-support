@@ -428,23 +428,24 @@ class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
     )
 
     def set_meta(self, dataset: DatasetProtocol, overwrite: bool = True, **kwd) -> None:
+
+        # Walk the crypt4gh header structure without decrypting any packets.
+        # Format: magic(8) + version(4) + packet_count(4) + [packet_length(4) + body(packet_length-4)] * N
         with open(dataset.get_file_name(), "rb") as f:
             magic = f.read(8)
             if magic != b"crypt4gh":
                 return
-            version = f.read(4)
-            if len(version) != 4:
-                return
-            header_length_bytes = f.read(4)
-            if len(header_length_bytes) != 4:
-                return
-            header_length = struct.unpack_from("<I", header_length_bytes)[0]
-            if header_length < 16:
+            try:
+                f.read(4)  # version
+                (packet_count,) = struct.unpack("<I", f.read(4))
+                for _ in range(packet_count):
+                    (pkt_len,) = struct.unpack("<I", f.read(4))
+                    f.read(pkt_len - 4)  # skip packet body
+                header_end = f.tell()
+            except Exception:
                 return
             f.seek(0)
-            header_bytes = f.read(header_length)
-        if len(header_bytes) != header_length:
-            return
+            header_bytes = f.read(header_end)
         dataset.metadata.crypt4gh_header = base64.b64encode(header_bytes).decode("ascii")
 
     def set_peek(self, dataset: DatasetProtocol, **kwd) -> None:

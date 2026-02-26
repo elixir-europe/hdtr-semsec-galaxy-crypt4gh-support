@@ -1,12 +1,14 @@
 import base64
-import struct
+import io
+
+import crypt4gh.header
 
 from galaxy.datatypes import sniff
 from galaxy.datatypes.registry import example_datatype_registry_for_sample
 from .util import (
+    get_input_files,
     MockDataset,
     MockDatasetDataset,
-    get_input_files,
 )
 
 
@@ -161,7 +163,12 @@ def test_crypt4gh_set_meta_stores_header_only():
     encoded_header = dataset.metadata.crypt4gh_header
     header_bytes = base64.b64decode(encoded_header, validate=True)
     assert header_bytes.startswith(b"crypt4gh")
-    header_length = struct.unpack_from("<I", header_bytes, 12)[0]
-    assert len(header_bytes) == header_length
+    # Verify the stored header is exactly the crypt4gh header (magic + version +
+    # packet_count + packet data) — the body (encrypted data) must not be included.
+    hstream = io.BytesIO(header_bytes)
+    packets = list(crypt4gh.header.parse(hstream))
+    assert len(packets) >= 1, "Header must contain at least one packet"
+    # After parsing all packets, the stream should be at EOF — no body bytes mixed in
+    assert hstream.read() == b"", "crypt4gh_header metadata must not include body bytes"
     assert not hasattr(dataset.metadata, "sequences")
     assert not hasattr(dataset.metadata, "data_lines")
