@@ -33,6 +33,7 @@ from galaxy.util.path import (
 )
 from .checkers import (
     is_bz2,
+    is_crypt4gh,
     is_gzip,
     is_xz,
 )
@@ -78,7 +79,7 @@ def get_fileobj(filename: str, mode: str = "r", compressed_formats: Optional[Lis
     :param filename: path to file that should be opened
     :param mode: mode to pass to opener
     :param compressed_formats: list of allowed compressed file formats among
-      'bz2', 'gzip', 'xz' and 'zip'. If left to None, all 3 formats are allowed
+      'crypt4gh', 'bz2', 'gzip', 'xz' and 'zip'. If left to None, all formats are allowed
     """
     return get_fileobj_raw(filename, mode, compressed_formats)[1]
 
@@ -109,14 +110,17 @@ def get_fileobj_raw(
     filename: str, mode: str = "r", compressed_formats: Optional[List[str]] = None
 ) -> Tuple[Optional[str], FileObjType]:
     if compressed_formats is None:
-        compressed_formats = ["bz2", "gzip", "xz", "zip"]
+        compressed_formats = ["crypt4gh", "bz2", "gzip", "xz", "zip"]
     # Remove 't' from mode, which may cause an error for compressed files
     mode = mode.replace("t", "")
     # 'U' mode is deprecated, we open in 'r'.
     if mode == "U":
         mode = "r"
     compressed_format = None
-    if "gzip" in compressed_formats and is_gzip(filename):
+    if "crypt4gh" in compressed_formats and is_crypt4gh(filename):
+        compressed_format = "crypt4gh"
+        fh: Union[gzip.GzipFile, bz2.BZ2File, lzma.LZMAFile, IO[bytes]] = open(filename, mode="rb")
+    elif "gzip" in compressed_formats and is_gzip(filename):
         fh: Union[gzip.GzipFile, bz2.BZ2File, lzma.LZMAFile, IO[bytes]] = gzip.GzipFile(filename, mode)
         compressed_format = "gzip"
     elif "bz2" in compressed_formats and is_bz2(filename):

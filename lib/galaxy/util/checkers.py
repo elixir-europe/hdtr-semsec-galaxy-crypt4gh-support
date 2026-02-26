@@ -77,7 +77,7 @@ def check_binary(name, file_path: bool = True) -> bool:
         # Read 1024 from the middle of the file if this is not
         # a gzip or zip compressed file (bzip are indexed),
         # to avoid issues with long txt headers on binary files.
-        if file_path and not is_gzip(name) and not is_zip(name) and not is_bz2(name):
+        if file_path and not is_gzip(name) and not is_zip(name) and not is_bz2(name) and not is_crypt4gh(name):
             # file_path=False doesn't seem to be used in the codebase
             temp.seek(read_start)
             return util.is_binary(temp.read(read_length))
@@ -176,6 +176,25 @@ def check_zip(file_path: str, check_content: bool = True, files=1) -> Tuple[bool
     return (True, True)
 
 
+def check_crypt4gh(file_path: str, check_content: bool = True) -> Tuple[bool, bool]:
+    # This method returns a tuple of booleans representing (is_crypt4gh, is_valid)
+    # We only inspect the public header bytes; body content is intentionally never parsed.
+    try:
+        with open(file_path, "rb") as temp:
+            magic_check = temp.read(8)
+            if magic_check != b"crypt4gh":
+                return (False, False)
+            version_bytes = temp.read(4)
+            if len(version_bytes) != 4:
+                return (False, False)
+            version = int.from_bytes(version_bytes, byteorder="little")
+            if version != 1:
+                return (False, False)
+    except Exception:
+        return (False, False)
+    return (True, True)
+
+
 def is_bz2(file_path: str) -> bool:
     is_bz2, is_valid = check_bz2(file_path, check_content=False)
     return is_bz2
@@ -194,6 +213,11 @@ def is_xz(file_path: str) -> bool:
 def is_zip(file_path: str) -> bool:
     is_zipped, is_valid = check_zip(file_path, check_content=False)
     return is_zipped
+
+
+def is_crypt4gh(file_path: str) -> bool:
+    is_c4gh, is_valid = check_crypt4gh(file_path, check_content=False)
+    return is_c4gh
 
 
 def is_single_file_zip(file_path: str) -> bool:
@@ -219,6 +243,7 @@ def check_image(file_path: str) -> bool:
 
 
 COMPRESSION_CHECK_FUNCTIONS: Dict[str, CompressionChecker] = {
+    "crypt4gh": check_crypt4gh,
     "gzip": check_gzip,
     "bz2": check_bz2,
     "xz": check_xz,
@@ -232,10 +257,12 @@ __all__ = (
     "check_gzip",
     "check_html",
     "check_image",
+    "check_crypt4gh",
     "check_zip",
     "COMPRESSION_CHECK_FUNCTIONS",
     "is_gzip",
     "is_bz2",
+    "is_crypt4gh",
     "is_xz",
     "is_zip",
 )
