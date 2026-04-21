@@ -176,7 +176,7 @@ class TestPrepareCrypt4GHInput:
             dataset=crypt4gh_test_dataset,
             reencryption_service_url=mock_recryptor.url,
             working_directory=str(tmp_path),
-            key_config_path=str(_C4GH_TEST_DIR / "crypt4ghfs_test.conf"),
+            compute_key_path=_COMPUTE_SEC,
         )
         with open(result.staged_path, "rb") as f:
             assert f.read(8) == b"crypt4gh", "Staged file must start with crypt4gh magic"
@@ -188,7 +188,7 @@ class TestPrepareCrypt4GHInput:
             dataset=crypt4gh_test_dataset,
             reencryption_service_url=mock_recryptor.url,
             working_directory=str(tmp_path),
-            key_config_path=str(_C4GH_TEST_DIR / "crypt4ghfs_test.conf"),
+            compute_key_path=_COMPUTE_SEC,
         )
         compute_sk = get_private_key(_COMPUTE_SEC, lambda: b"")
         with open(result.staged_path, "rb") as infile:
@@ -206,7 +206,7 @@ class TestPrepareCrypt4GHInput:
             dataset=crypt4gh_test_dataset,
             reencryption_service_url=mock_recryptor.url,
             working_directory=str(tmp_path),
-            key_config_path=str(_C4GH_TEST_DIR / "crypt4ghfs_test.conf"),
+            compute_key_path=_COMPUTE_SEC,
         )
 
         with open(result.staged_path, "rb") as f:
@@ -228,6 +228,16 @@ class TestPrepareCrypt4GHInput:
 
         assert staged_body == original_body, "Re-staged file body must be identical to the original encrypted body"
 
+    def test_decrypted_path_field_is_inside_stage_dir(self, mock_recryptor, crypt4gh_test_dataset, tmp_path):
+        """decrypted_path must be a child of stage_dir."""
+        result = prepare_crypt4gh_input(
+            dataset=crypt4gh_test_dataset,
+            reencryption_service_url=mock_recryptor.url,
+            working_directory=str(tmp_path),
+            compute_key_path=_COMPUTE_SEC,
+        )
+        assert result.decrypted_path.startswith(result.stage_dir + os.sep)
+
     def test_prepare_fails_without_metadata(self, mock_recryptor, tmp_path):
         """prepare_crypt4gh_input must raise if crypt4gh_header metadata is missing."""
         mock_metadata = MagicMock()
@@ -242,7 +252,27 @@ class TestPrepareCrypt4GHInput:
                 dataset=mock_dataset,
                 reencryption_service_url=mock_recryptor.url,
                 working_directory=str(tmp_path),
-                key_config_path=str(_C4GH_TEST_DIR / "crypt4ghfs_test.conf"),
+                compute_key_path=_COMPUTE_SEC,
+            )
+
+    def test_prepare_fails_on_missing_key_path(self, mock_recryptor, crypt4gh_test_dataset, tmp_path):
+        """prepare_crypt4gh_input must raise if compute_key_path is empty."""
+        with pytest.raises(JobPreparationException, match="compute_key_path is required"):
+            prepare_crypt4gh_input(
+                dataset=crypt4gh_test_dataset,
+                reencryption_service_url=mock_recryptor.url,
+                working_directory=str(tmp_path),
+                compute_key_path="",
+            )
+
+    def test_prepare_fails_on_nonexistent_key_path(self, mock_recryptor, crypt4gh_test_dataset, tmp_path):
+        """prepare_crypt4gh_input must raise if compute_key_path does not exist."""
+        with pytest.raises(JobPreparationException, match="not found"):
+            prepare_crypt4gh_input(
+                dataset=crypt4gh_test_dataset,
+                reencryption_service_url=mock_recryptor.url,
+                working_directory=str(tmp_path),
+                compute_key_path="/nonexistent/path/key.sec",
             )
 
     def test_prepare_fails_on_service_error(self, crypt4gh_test_dataset, tmp_path):
@@ -252,21 +282,22 @@ class TestPrepareCrypt4GHInput:
                 dataset=crypt4gh_test_dataset,
                 reencryption_service_url="http://127.0.0.1:1",  # No server here
                 working_directory=str(tmp_path),
-                key_config_path=str(_C4GH_TEST_DIR / "crypt4ghfs_test.conf"),
+                compute_key_path=_COMPUTE_SEC,
             )
 
-    def test_staged_directories_created(self, mock_recryptor, crypt4gh_test_dataset, tmp_path):
-        """Both the stage_dir and mount_dir should be created, and the per-dataset conf written."""
+    def test_staged_directories_and_file_created(self, mock_recryptor, crypt4gh_test_dataset, tmp_path):
+        """stage_dir must be created and staged_path must exist; no conf file is written."""
         result = prepare_crypt4gh_input(
             dataset=crypt4gh_test_dataset,
             reencryption_service_url=mock_recryptor.url,
             working_directory=str(tmp_path),
-            key_config_path=str(_C4GH_TEST_DIR / "crypt4ghfs_test.conf"),
+            compute_key_path=_COMPUTE_SEC,
         )
         assert os.path.isdir(result.stage_dir)
-        assert os.path.isdir(result.mount_dir)
         assert os.path.isfile(result.staged_path)
-        assert os.path.isfile(result.dataset_conf_path), "Per-dataset crypt4ghfs conf must be written"
+        # No crypt4ghfs conf file should be written
+        conf_files = list(Path(result.stage_dir).glob("*.conf"))
+        assert conf_files == [], "No crypt4ghfs conf files should be written"
 
 
 # ---------------------------------------------------------------------------
@@ -281,41 +312,54 @@ class TestBuildCommands:
         return StagedCrypt4GHInput(
             staged_path=f"/wd/_c4gh_stage/ds_{idx}/input.crypt4gh",
             stage_dir=f"/wd/_c4gh_stage/ds_{idx}",
-            mount_dir=f"/wd/_c4gh_mnt/ds_{idx}",
-            mounted_path=f"/wd/_c4gh_mnt/ds_{idx}/input",
+            decrypted_path=f"/wd/_c4gh_stage/ds_{idx}/input",
             original_dataset_path=f"/galaxy/files/dataset_{idx}.dat",
             compute_keypair_id="mock-compute-key-1",
-            dataset_conf_path=f"/wd/_c4gh_stage/ds_{idx}/crypt4ghfs.conf",
         )
 
-    def test_pre_commands_contain_crypt4ghfs(self):
+    def test_pre_commands_invoke_python_decrypt(self):
         si = self._make_staged_input(0)
-        cmds = build_crypt4gh_pre_commands([si])
-        assert "crypt4ghfs" in cmds
-        # Per-dataset conf (not a global conf path) must be used
-        assert si.dataset_conf_path in cmds
-        # Only the mountpoint is passed as a positional arg; stage_dir is inside
-        # the conf file, not passed directly on the command line
-        assert si.mount_dir in cmds
-        # The crypt4ghfs line must not pass stage_dir as an extra positional arg
-        crypt4ghfs_line = next(line for line in cmds.splitlines() if line.startswith("crypt4ghfs"))
-        assert (
-            crypt4ghfs_line.count("'") == 4
-        ), "crypt4ghfs line must have exactly 2 quoted args: --conf <path> <mountpoint>"
-        # launch in background
-        assert "&" in cmds
+        cmds = build_crypt4gh_pre_commands([si], compute_key_path="/path/compute.sec")
+        assert "${GALAXY_VIRTUAL_ENV}/bin/python" in cmds
+        assert "crypt4gh.lib.decrypt" in cmds
+        assert si.staged_path in cmds
+        assert si.decrypted_path in cmds
+        # No crypt4ghfs or fusermount references
+        assert "crypt4ghfs" not in cmds
+        assert "fusermount" not in cmds
 
-    def test_post_commands_contain_fusermount(self):
+    def test_pre_commands_contain_fail_fast_guard(self):
+        si = self._make_staged_input(0)
+        cmds = build_crypt4gh_pre_commands([si], compute_key_path="/path/compute.sec")
+        assert "exit 1" in cmds
+        assert si.decrypted_path in cmds
+
+    def test_post_commands_remove_decrypted_file(self):
         si = self._make_staged_input(0)
         cmds = build_crypt4gh_post_commands([si])
-        assert "fusermount" in cmds
-        assert si.mount_dir in cmds
+        assert "rm -f" in cmds
+        assert si.decrypted_path in cmds
+        # No fusermount or PID tracking
+        assert "fusermount" not in cmds
+        assert "_CRYPT4GHFS_PID" not in cmds
 
-    def test_multiple_inputs_generate_multiple_pids(self):
+    def test_passphrase_env_injected_when_provided(self):
+        si = self._make_staged_input(0)
+        cmds = build_crypt4gh_pre_commands([si], compute_key_path="/path/compute.sec", passphrase_env="MY_C4GH_PASS")
+        assert "MY_C4GH_PASS" in cmds
+
+    def test_no_passphrase_env_uses_empty_bytes(self):
+        si = self._make_staged_input(0)
+        cmds = build_crypt4gh_pre_commands([si], compute_key_path="/path/compute.sec", passphrase_env=None)
+        assert 'b""' in cmds
+        assert "MY_C4GH_PASS" not in cmds
+
+    def test_multiple_inputs_generate_multiple_decrypt_blocks(self):
         inputs = [self._make_staged_input(i) for i in range(3)]
-        pre = build_crypt4gh_pre_commands(inputs)
+        pre = build_crypt4gh_pre_commands(inputs, compute_key_path="/path/compute.sec")
         post = build_crypt4gh_post_commands(inputs)
-        # Each input should have its own PID variable
-        for i in range(3):
-            assert f"_CRYPT4GHFS_PID_{i}" in pre
-            assert f"_CRYPT4GHFS_PID_{i}" in post
+        # Each input's paths must appear in the respective snippet
+        for si in inputs:
+            assert si.staged_path in pre
+            assert si.decrypted_path in pre
+            assert si.decrypted_path in post

@@ -347,7 +347,7 @@ class BaseJobRunner:
         return True
 
     def _apply_crypt4gh_staging(self, job_wrapper: "MinimalJobWrapper", command_line: str) -> str:
-        """Wrap ``command_line`` with crypt4ghfs mount/unmount commands for any
+        """Wrap ``command_line`` with pre/post decrypt commands for any
         crypt4gh-encrypted input datasets.
 
         If ``enable_crypt4gh_transparent_staging`` is ``False`` in the Galaxy
@@ -382,21 +382,19 @@ class BaseJobRunner:
             )
 
         # Per-destination override, falls back to global config key.
-        key_config_path: Optional[str] = job_wrapper.get_destination_configuration(
-            "crypt4gh_compute_key_config_path",
-            getattr(job_wrapper.app.config, "crypt4gh_compute_key_config_path", None),
+        compute_key_path: Optional[str] = job_wrapper.get_destination_configuration(
+            "crypt4gh_compute_key_path",
+            getattr(job_wrapper.app.config, "crypt4gh_compute_key_path", None),
         )
-        if not key_config_path:
+        if not compute_key_path:
             raise JobPreparationException(
                 "enable_crypt4gh_transparent_staging is True but "
-                "crypt4gh_compute_key_config_path is not configured in galaxy.yml "
+                "crypt4gh_compute_key_path is not configured in galaxy.yml "
                 "or in the job destination params"
             )
-        mount_timeout: int = int(
-            job_wrapper.get_destination_configuration(
-                "crypt4gh_mount_timeout",
-                getattr(job_wrapper.app.config, "crypt4gh_mount_timeout", 30),
-            )
+        passphrase_env: Optional[str] = job_wrapper.get_destination_configuration(
+            "crypt4gh_compute_key_passphrase_env",
+            getattr(job_wrapper.app.config, "crypt4gh_compute_key_passphrase_env", None),
         )
 
         # Collect all crypt4gh-encrypted inputs
@@ -414,7 +412,7 @@ class BaseJobRunner:
                 dataset=dataset,
                 reencryption_service_url=service_url,
                 working_directory=os.path.abspath(job_wrapper.working_directory),
-                key_config_path=key_config_path,
+                compute_key_path=compute_key_path,
             )
             staged_inputs.append(staged)
 
@@ -429,16 +427,18 @@ class BaseJobRunner:
             with open(tool_script_path) as _f:
                 script = _f.read()
             for si in staged_inputs:
-                script = script.replace(si.original_dataset_path, si.mounted_path)
+                script = script.replace(si.original_dataset_path, si.decrypted_path)
             with open(tool_script_path, "w") as _f:
                 _f.write(script)
         else:
             # Fallback for runners that inline the command (no script file).
             for si in staged_inputs:
-                command_line = command_line.replace(si.original_dataset_path, si.mounted_path)
+                command_line = command_line.replace(si.original_dataset_path, si.decrypted_path)
 
-        # Wrap the runner command with mount/unmount shell snippets.
-        pre_cmds = build_crypt4gh_pre_commands(staged_inputs, mount_timeout=mount_timeout)
+        # Wrap the runner command with decrypt/cleanup shell snippets.
+        pre_cmds = build_crypt4gh_pre_commands(
+            staged_inputs, compute_key_path=compute_key_path, passphrase_env=passphrase_env
+        )
         post_cmds = build_crypt4gh_post_commands(staged_inputs)
         wrapped_command = (
             f"{pre_cmds}\n"
