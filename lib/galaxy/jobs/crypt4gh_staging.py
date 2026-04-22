@@ -17,7 +17,10 @@ import io
 import logging
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import (
+    Any,
+    TYPE_CHECKING,
+)
 
 import crypt4gh.header
 import requests
@@ -50,6 +53,69 @@ class StagedCrypt4GHInput:
     original_dataset_path: str
     #: Compute key-pair ID returned by the re-encryptor service (for auditing)
     compute_keypair_id: str
+
+
+@dataclass
+class StagedCrypt4GHOutput:
+    """Paths and metadata needed to encrypt one tool output after execution."""
+
+    #: Dataset id for log/error context
+    dataset_id: int
+    #: Plain output file path produced by the tool on compute side
+    plaintext_path: str
+    #: Marker file created when encryption succeeds for this output
+    encrypted_marker_path: str
+    #: Target encrypted extension used at finalize time (e.g. ``fastqsanger.crypt4gh``)
+    encrypted_ext: str
+
+
+def fetch_user_public_key(user_id: str, reencryption_service_url: str) -> bytes:
+    """Fetch the user's Crypt4GH public key from the re-encryptor service.
+
+    Parameters
+    ----------
+    user_id:
+        User identifier understood by the re-encryptor service.
+    reencryption_service_url:
+        Base URL of the crypt4gh re-encryptor service.
+
+    Returns
+    -------
+    bytes
+        Raw X25519 public key bytes.
+
+    Raises
+    ------
+    JobPreparationException
+        If the service is unreachable, returns a non-success status code,
+        or returns invalid JSON/base64 payload.
+    """
+    service_url = reencryption_service_url.rstrip("/")
+    try:
+        response = requests.get(
+            f"{service_url}/user_public_key",
+            params={"user_id": user_id},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise JobPreparationException(
+            f"Failed to contact crypt4gh re-encryptor service at {service_url} for user key lookup: {exc}"
+        ) from exc
+
+    if response.status_code == 404:
+        raise JobPreparationException(f"No crypt4gh public key registered for user {user_id!r}.")
+    if not response.ok:
+        raise JobPreparationException(
+            f"crypt4gh re-encryptor service returned HTTP {response.status_code} "
+            f"for user key lookup: {response.text}"
+        )
+
+    try:
+        response_data = response.json()
+        public_key_b64: str = response_data["crypt4gh_public_key"]
+        return base64.b64decode(public_key_b64)
+    except (ValueError, KeyError) as exc:
+        raise JobPreparationException(f"Unexpected response from re-encryptor service: {exc}") from exc
 
 
 def prepare_crypt4gh_input(
@@ -257,6 +323,113 @@ def build_crypt4gh_post_commands(staged_inputs: list[StagedCrypt4GHInput]) -> st
         lines.append(f"# Remove decrypted file for input {i}")
         lines.append(f"rm -f {_shell_quote(si.decrypted_path)}")
     return "\n".join(lines)
+
+
+def build_crypt4gh_output_post_commands(
+    staged_outputs: list[StagedCrypt4GHOutput],
+    user_public_key: bytes,
+) -> str:
+    """Return shell commands to encrypt eligible outputs after the tool finishes.
+
+    The command snippet encrypts each output in-place and writes a marker file
+    on success. Missing output files are skipped to preserve optional-output
+    behavior. On encryption failure, ``return_code`` is set to ``1`` so the
+    wrapped command fails without short-circuiting final cleanup/exit handling.
+    """
+    if not staged_outputs:
+        return ""
+
+    public_key_b64 = base64.b64encode(user_public_key).decode("ascii")
+    lines = []
+    for i, so in enumerate(staged_outputs):
+        lines.append(f"# Encrypt crypt4gh output {i} (dataset id: {so.dataset_id})")
+        lines.append(f"if [ -e {_shell_quote(so.plaintext_path)} ]; then")
+        py_script = (
+            "import base64, os, crypt4gh.lib; "
+            "from nacl.public import PrivateKey as _NaclPrivKey; "
+            f"pub = base64.b64decode({_py_str(public_key_b64)}); "
+            "esk = bytes(_NaclPrivKey.generate()); "
+            "keys = [(0, esk, pub)]; "
+            f"src = {_py_str(so.plaintext_path)}; "
+            "tmp = src + '.crypt4gh.tmp'; "
+            "inf = open(src, 'rb'); outf = open(tmp, 'wb'); "
+            "crypt4gh.lib.encrypt(keys, inf, outf); "
+            "inf.close(); outf.close(); "
+            "os.replace(tmp, src)"
+        )
+        lines.append(f'    "${{GALAXY_VIRTUAL_ENV}}/bin/python" -c {_shell_quote(py_script)}')
+        lines.append("    if [ $? -ne 0 ]; then")
+        lines.append(f"        echo 'ERROR: crypt4gh output encryption failed for dataset {so.dataset_id}' >&2")
+        lines.append("        return_code=1")
+        lines.append("    else")
+        lines.append(f"        mkdir -p {_shell_quote(os.path.dirname(so.encrypted_marker_path))}")
+        lines.append(
+            f"        printf '%s\\n' {_shell_quote(so.encrypted_ext)} > {_shell_quote(so.encrypted_marker_path)}"
+        )
+        lines.append("    fi")
+        lines.append("fi")
+    return "\n".join(lines)
+
+
+def plan_crypt4gh_output_staging(
+    output_hdas_and_paths: dict[str, tuple[Any, Any]],
+    tool_outputs: dict[str, Any],
+    datatypes_registry: Any,
+    working_directory: str,
+    outputs_to_working_directory: bool,
+) -> list[StagedCrypt4GHOutput]:
+    """Build output encryption staging descriptors for eligible tool outputs.
+
+    Raises
+    ------
+    JobPreparationException
+        If at least one output is crypt4gh-eligible but
+        ``outputs_to_working_directory`` is disabled.
+    """
+    staged_outputs: list[StagedCrypt4GHOutput] = []
+    outputs_marker_dir = os.path.join(os.path.abspath(working_directory), "_c4gh_stage", "outputs")
+
+    for output_name, (dataset, dataset_path) in output_hdas_and_paths.items():
+        if dataset.dataset is None:
+            continue
+
+        base_ext = dataset.ext
+        if base_ext.endswith(".crypt4gh"):
+            # Already encrypted/typed as crypt4gh; avoid double wrapping.
+            continue
+
+        if base_ext in ("auto", "data", "_sniff_"):
+            # Try to resolve from static tool output declaration.
+            tool_output = tool_outputs.get(output_name)
+            declared_ext = getattr(tool_output, "format", None) if tool_output else None
+            if declared_ext and declared_ext not in ("auto", "data", "_sniff_", "input"):
+                base_ext = declared_ext
+            else:
+                # Dynamic/discovered output with unknown ext at prepare time.
+                continue
+
+        encrypted_ext = f"{base_ext}.crypt4gh"
+        encrypted_datatype = datatypes_registry.get_datatype_by_extension(encrypted_ext)
+        if encrypted_datatype is None:
+            encrypted_datatype = datatypes_registry.get_or_create_crypt4gh_datatype(base_ext)
+        if encrypted_datatype is None:
+            continue
+
+        if not outputs_to_working_directory:
+            raise JobPreparationException(
+                "crypt4gh output encryption requires outputs_to_working_directory=true " "for crypt4gh-eligible outputs"
+            )
+
+        staged_outputs.append(
+            StagedCrypt4GHOutput(
+                dataset_id=dataset.dataset.id,
+                plaintext_path=dataset_path.false_path,
+                encrypted_marker_path=os.path.join(outputs_marker_dir, f"ds_{dataset.dataset.id}.encrypted"),
+                encrypted_ext=encrypted_ext,
+            )
+        )
+
+    return staged_outputs
 
 
 def _py_str(path: str) -> str:

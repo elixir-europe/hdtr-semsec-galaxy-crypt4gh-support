@@ -1,6 +1,6 @@
 # Manual UI Testing Guide: Crypt4GH Support
 
-This guide walks through manually testing the Phase 1 and Phase 2 crypt4gh
+This guide walks through manually testing the Phase 1, Phase 2, and Phase 3 crypt4gh
 changes in a running Galaxy instance.
 
 All commands assume you are in the **Galaxy root directory** with the venv active:
@@ -55,9 +55,9 @@ file (`.sec` format produced by `crypt4gh-keygen`):
 
 ```yaml
 galaxy:
-  enable_crypt4gh_transparent_staging: true
-  crypt4gh_reencryption_service_url: "http://127.0.0.1:54321" # port from Step 1
-  crypt4gh_compute_key_path: "/absolute/path/to/test-data/crypt4gh/compute_key.sec"
+    enable_crypt4gh_transparent_staging: true
+    crypt4gh_reencryption_service_url: "http://127.0.0.1:54321" # port from Step 1
+    crypt4gh_compute_key_path: "/absolute/path/to/test-data/crypt4gh/compute_key.sec"
 ```
 
 Replace the path above with the absolute path on your system
@@ -94,9 +94,9 @@ containing a short FASTQ snippet, encrypted with the test user key.
 1. Open `http://localhost:8080` and log in (or use the default admin account).
 2. Click the **Upload** button (top-left of the tool panel).
 3. Click **Choose local file** and select:
-   ```
-   test-data/crypt4gh/test.fastqsanger.crypt4gh
-   ```
+    ```
+    test-data/crypt4gh/test.fastqsanger.crypt4gh
+    ```
 4. In the **Type** column leave it as `Auto-detect` — Galaxy should sniff the
    crypt4gh magic bytes and assign the type automatically.
 5. Click **Start**, then **Close**.
@@ -182,7 +182,53 @@ EOF
 
 ---
 
-## Step 6 — Verify the staging gate (Phase 1 / Phase 2 interaction)
+## Step 6 — Verify output re-encryption (Phase 3)
+
+After the job in Step 5 completes, inspect the same job script and outputs.
+
+1. Confirm the history output dataset type ends with `.crypt4gh`.
+2. Open dataset details and verify `metadata.crypt4gh_header` is populated.
+3. Inspect the job script for a post-tool encryption block (after `_CRYPT4GH_TOOL_EXIT=$?`) that invokes `crypt4gh.lib.encrypt`.
+4. Confirm plaintext output files are not left behind in the job working path after completion.
+
+Example checks:
+
+```bash
+JOB_ID=1  # replace
+
+# Final persisted output should have crypt4gh magic bytes
+OUT_DATASET_PATH=$(readlink -f database/files/*/*/*/*/* 2>/dev/null | head -n 1)
+python - "$OUT_DATASET_PATH" << 'EOF'
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+with p.open('rb') as f:
+   print('magic:', f.read(8))
+EOF
+# Expected: b'crypt4gh'
+```
+
+To verify ciphertext decrypts correctly with the user private key:
+
+```bash
+python - << 'EOF'
+import io
+import crypt4gh.lib
+from crypt4gh.keys import get_private_key
+
+encrypted_path = 'REPLACE_WITH_OUTPUT_DATASET_PATH'
+user_sk = get_private_key('test-data/crypt4gh/user_key.sec', lambda: b'')
+
+with open(encrypted_path, 'rb') as f:
+   out = io.BytesIO()
+   crypt4gh.lib.decrypt([(0, user_sk, None)], f, out)
+
+print('Decrypted output bytes:', out.getvalue()[:200])
+EOF
+```
+
+## Step 7 — Verify the staging gate (Phase 1 / Phase 2 / Phase 3 interaction)
 
 To confirm the gate works, temporarily disable staging and check that the
 dataset disappears from tool inputs:
@@ -191,7 +237,8 @@ dataset disappears from tool inputs:
 2. Restart Galaxy (`./run.sh`).
 3. Open the same FastQC tool — the `fastqsanger.crypt4gh` dataset should **not**
    appear in the input drop-down.
-4. Re-enable the flag and restart to restore normal behaviour.
+4. Run a tool and verify outputs are no longer re-encrypted to `.crypt4gh`.
+5. Re-enable the flag and restart to restore normal behaviour.
 
 ---
 

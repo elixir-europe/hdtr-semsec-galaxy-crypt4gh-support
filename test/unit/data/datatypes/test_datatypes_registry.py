@@ -139,6 +139,20 @@ def test_crypt4gh_dynamic_datatypes_registration_and_converters():
     assert converters_with_crypt4gh == []
 
 
+def test_crypt4gh_runtime_wrapper_registration_for_missing_base_datatype_wrapper():
+    datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
+    assert datatypes_registry.get_datatype_by_extension("fqtoc.crypt4gh") is None
+
+    runtime_datatype = datatypes_registry.get_or_create_crypt4gh_datatype("fqtoc")
+    assert runtime_datatype is not None
+    assert runtime_datatype.file_ext == "fqtoc.crypt4gh"
+    assert runtime_datatype.uncompressed_datatype_instance.file_ext == "fqtoc"
+    assert runtime_datatype.enable_crypt4gh_transparent_staging is True
+
+    # Repeated requests should return the already-registered instance.
+    assert datatypes_registry.get_or_create_crypt4gh_datatype("fqtoc") is runtime_datatype
+
+
 def test_crypt4gh_matches_any_staging_gate():
     default_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=False)
     fastqsanger = default_registry.get_datatype_by_extension("fastqsanger")

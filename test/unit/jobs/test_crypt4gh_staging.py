@@ -28,11 +28,15 @@ import requests
 from crypt4gh.keys import get_private_key
 
 from galaxy.jobs.crypt4gh_staging import (
+    build_crypt4gh_output_post_commands,
     build_crypt4gh_post_commands,
     build_crypt4gh_pre_commands,
+    fetch_user_public_key,
     JobPreparationException,
+    plan_crypt4gh_output_staging,
     prepare_crypt4gh_input,
     StagedCrypt4GHInput,
+    StagedCrypt4GHOutput,
 )
 
 # ---------------------------------------------------------------------------
@@ -42,6 +46,7 @@ from galaxy.jobs.crypt4gh_staging import (
 _WORKSPACE_ROOT = Path(__file__).parents[3]  # test/unit/jobs/ → repo root
 _C4GH_TEST_DIR = _WORKSPACE_ROOT / "test-data" / "crypt4gh"
 _USER_SEC = str(_C4GH_TEST_DIR / "user_key.sec")
+_USER_PUB = str(_C4GH_TEST_DIR / "user_key.pub")
 _COMPUTE_SEC = str(_C4GH_TEST_DIR / "compute_key.sec")
 _COMPUTE_PUB = str(_C4GH_TEST_DIR / "compute_key.pub")
 _TEST_C4GH_FILE = str(_C4GH_TEST_DIR / "test.fastqsanger.crypt4gh")
@@ -62,6 +67,7 @@ def mock_recryptor():
     srv = MockRecryptorServer(
         user_private_key_path=_USER_SEC,
         compute_public_key_path=_COMPUTE_PUB,
+        user_public_key_path=_USER_PUB,
     )
     srv.start()
     yield srv
@@ -160,6 +166,21 @@ class TestMockRecryptorService:
             timeout=10,
         )
         assert response.status_code == 400
+
+    def test_user_public_key_endpoint_returns_key(self, mock_recryptor):
+        response = requests.get(
+            f"{mock_recryptor.url}/user_public_key",
+            params={"user_id": "user@test.invalid"},
+            timeout=5,
+        )
+        assert response.status_code == 200
+        key_b64 = response.json()["crypt4gh_public_key"]
+        key_bytes = base64.b64decode(key_b64)
+        assert len(key_bytes) == 32
+
+    def test_user_public_key_endpoint_requires_user_id(self, mock_recryptor):
+        response = requests.get(f"{mock_recryptor.url}/user_public_key", timeout=5)
+        assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +321,16 @@ class TestPrepareCrypt4GHInput:
         assert conf_files == [], "No crypt4ghfs conf files should be written"
 
 
+class TestFetchUserPublicKey:
+    def test_fetch_user_public_key_returns_bytes(self, mock_recryptor):
+        key = fetch_user_public_key("user@test.invalid", mock_recryptor.url)
+        assert len(key) == 32
+
+    def test_fetch_user_public_key_propagates_service_error(self):
+        with pytest.raises(JobPreparationException, match="Failed to contact"):
+            fetch_user_public_key("user@test.invalid", "http://127.0.0.1:1")
+
+
 # ---------------------------------------------------------------------------
 # Tests: build_crypt4gh_pre_commands / build_crypt4gh_post_commands
 # ---------------------------------------------------------------------------
@@ -315,6 +346,14 @@ class TestBuildCommands:
             decrypted_path=f"/wd/_c4gh_stage/ds_{idx}/input",
             original_dataset_path=f"/galaxy/files/dataset_{idx}.dat",
             compute_keypair_id="mock-compute-key-1",
+        )
+
+    def _make_staged_output(self, idx: int) -> "StagedCrypt4GHOutput":
+        return StagedCrypt4GHOutput(
+            dataset_id=idx,
+            plaintext_path=f"/wd/outputs/dataset_{idx}.dat",
+            encrypted_marker_path=f"/wd/_c4gh_stage/outputs/ds_{idx}.encrypted",
+            encrypted_ext="fastqsanger.crypt4gh",
         )
 
     def test_pre_commands_invoke_python_decrypt(self):
@@ -363,3 +402,73 @@ class TestBuildCommands:
             assert si.staged_path in pre
             assert si.decrypted_path in pre
             assert si.decrypted_path in post
+
+    def test_output_post_commands_invoke_encrypt_and_marker(self):
+        so = self._make_staged_output(7)
+        cmds = build_crypt4gh_output_post_commands([so], user_public_key=b"a" * 32)
+        assert "crypt4gh.lib.encrypt" in cmds
+        assert so.plaintext_path in cmds
+        assert so.encrypted_marker_path in cmds
+        assert "return_code=1" in cmds
+
+    def test_output_post_commands_empty_returns_empty(self):
+        assert build_crypt4gh_output_post_commands([], user_public_key=b"a" * 32) == ""
+
+
+class TestPlanCrypt4GHOutputStaging:
+    def _mock_output_dataset(self, ext: str, dataset_id: int = 7):
+        dataset = MagicMock()
+        dataset.ext = ext
+        dataset.dataset = MagicMock()
+        dataset.dataset.id = dataset_id
+        return dataset
+
+    def _mock_dataset_path(self, path: str = "/wd/output.dat"):
+        dataset_path = MagicMock()
+        dataset_path.false_path = path
+        return dataset_path
+
+    def test_plan_output_staging_returns_eligible_output(self, tmp_path):
+        output_hdas_and_paths = {
+            "out1": (
+                self._mock_output_dataset("fastqsanger", dataset_id=42),
+                self._mock_dataset_path("/wd/out1.dat"),
+            )
+        }
+        tool_outputs: dict[str, object] = {}
+        datatypes_registry = MagicMock()
+        datatypes_registry.get_datatype_by_extension.return_value = object()
+
+        staged_outputs = plan_crypt4gh_output_staging(
+            output_hdas_and_paths=output_hdas_and_paths,
+            tool_outputs=tool_outputs,
+            datatypes_registry=datatypes_registry,
+            working_directory=str(tmp_path),
+            outputs_to_working_directory=True,
+        )
+
+        assert len(staged_outputs) == 1
+        staged = staged_outputs[0]
+        assert staged.dataset_id == 42
+        assert staged.plaintext_path == "/wd/out1.dat"
+        assert staged.encrypted_ext == "fastqsanger.crypt4gh"
+        assert staged.encrypted_marker_path.endswith("_c4gh_stage/outputs/ds_42.encrypted")
+
+    def test_plan_output_staging_raises_without_outputs_to_working_directory(self, tmp_path):
+        output_hdas_and_paths = {
+            "out1": (
+                self._mock_output_dataset("fastqsanger", dataset_id=42),
+                self._mock_dataset_path("/wd/out1.dat"),
+            )
+        }
+        datatypes_registry = MagicMock()
+        datatypes_registry.get_datatype_by_extension.return_value = object()
+
+        with pytest.raises(JobPreparationException, match="outputs_to_working_directory=true"):
+            plan_crypt4gh_output_staging(
+                output_hdas_and_paths=output_hdas_and_paths,
+                tool_outputs={},
+                datatypes_registry=datatypes_registry,
+                working_directory=str(tmp_path),
+                outputs_to_working_directory=False,
+            )

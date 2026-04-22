@@ -35,9 +35,12 @@ from galaxy.job_execution.output_collect import (
 )
 from galaxy.jobs.command_factory import build_command
 from galaxy.jobs.crypt4gh_staging import (
+    build_crypt4gh_output_post_commands,
     build_crypt4gh_post_commands,
     build_crypt4gh_pre_commands,
+    fetch_user_public_key,
     JobPreparationException,
+    plan_crypt4gh_output_staging,
     prepare_crypt4gh_input,
     StagedCrypt4GHInput,
 )
@@ -347,12 +350,10 @@ class BaseJobRunner:
         return True
 
     def _apply_crypt4gh_staging(self, job_wrapper: "MinimalJobWrapper", command_line: str) -> str:
-        """Wrap ``command_line`` with pre/post decrypt commands for any
-        crypt4gh-encrypted input datasets.
+        """Wrap ``command_line`` with pre/post crypt4gh commands.
 
         If ``enable_crypt4gh_transparent_staging`` is ``False`` in the Galaxy
-        config, or no input datasets use the crypt4gh format, the original
-        ``command_line`` is returned unchanged.
+        config, the original ``command_line`` is returned unchanged.
 
         Parameters
         ----------
@@ -369,7 +370,8 @@ class BaseJobRunner:
         Raises
         ------
         JobPreparationException
-            If staging is enabled and fails for any input dataset.
+            If staging is enabled and setup fails for required input/output
+            crypt4gh operations.
         """
         if not getattr(job_wrapper.app.config, "enable_crypt4gh_transparent_staging", False):
             return command_line
@@ -416,7 +418,32 @@ class BaseJobRunner:
             )
             staged_inputs.append(staged)
 
-        if not staged_inputs:
+        # Collect all outputs that should be persisted as *.crypt4gh.
+        outputs_to_working_directory = asbool(
+            job_wrapper.get_destination_configuration(
+                "outputs_to_working_directory",
+                getattr(job_wrapper.app.config, "outputs_to_working_directory", False),
+            )
+        )
+        output_hdas_and_paths = job_wrapper.job_io.get_output_hdas_and_fnames()
+        tool_outputs = getattr(job_wrapper.tool, "outputs", {}) if getattr(job_wrapper, "tool", None) else {}
+        staged_outputs = plan_crypt4gh_output_staging(
+            output_hdas_and_paths=output_hdas_and_paths,
+            tool_outputs=tool_outputs,
+            datatypes_registry=job_wrapper.app.datatypes_registry,
+            working_directory=job_wrapper.working_directory,
+            outputs_to_working_directory=outputs_to_working_directory,
+        )
+
+        user_public_key: Optional[bytes] = None
+        if staged_outputs:
+            user = job_wrapper.get_job().user
+            if user is None:
+                raise JobPreparationException("crypt4gh output encryption requires an authenticated user")
+            user_id = user.email or str(user.id)
+            user_public_key = fetch_user_public_key(user_id=user_id, reencryption_service_url=service_url)
+
+        if not staged_inputs and not staged_outputs:
             return command_line
 
         # The actual tool command lives inside tool_script.sh; command_line is
@@ -435,16 +462,45 @@ class BaseJobRunner:
             for si in staged_inputs:
                 command_line = command_line.replace(si.original_dataset_path, si.decrypted_path)
 
-        # Wrap the runner command with decrypt/cleanup shell snippets.
+        # Wrap the runner command with decrypt/encrypt/cleanup shell snippets.
+        # Delay publication of the real exit-code file until after output
+        # encryption and marker writes are complete; otherwise the runner can
+        # collect plaintext outputs before the post block runs.
+        exit_code_file = default_exit_code_file(os.path.abspath(job_wrapper.working_directory), job_wrapper.job_id)
+        delayed_exit_code_file = f"{exit_code_file}.c4gh_pending"
+        command_line = command_line.replace(
+            f"echo $return_code > {exit_code_file}",
+            f"echo $return_code > {delayed_exit_code_file}",
+        )
+
         pre_cmds = build_crypt4gh_pre_commands(
             staged_inputs, compute_key_path=compute_key_path, passphrase_env=passphrase_env
         )
+        output_post_cmds = (
+            build_crypt4gh_output_post_commands(staged_outputs, user_public_key)
+            if staged_outputs and user_public_key
+            else ""
+        )
+
+        # Ensure output encryption runs before metadata persistence, otherwise
+        # plaintext can be collected into object store first (extended metadata flow).
+        if output_post_cmds:
+            if "python metadata/set.py" in command_line:
+                command_line = command_line.replace(
+                    "python metadata/set.py",
+                    f"{output_post_cmds}\npython metadata/set.py",
+                    1,
+                )
+            else:
+                command_line = f"{command_line}\n{output_post_cmds}"
+
         post_cmds = build_crypt4gh_post_commands(staged_inputs)
         wrapped_command = (
             f"{pre_cmds}\n"
             f"{command_line}\n"
             f"_CRYPT4GH_TOOL_EXIT=$?\n"
             f"{post_cmds}\n"
+            f"echo $_CRYPT4GH_TOOL_EXIT > {exit_code_file}\n"
             f"exit $_CRYPT4GH_TOOL_EXIT"
         )
         return wrapped_command

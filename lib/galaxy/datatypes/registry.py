@@ -378,9 +378,7 @@ class Registry:
                                 dynamic_parent = binary.Bz2DynamicCompressedArchive
                             elif auto_compressed_type == "crypt4gh":
                                 dynamic_parent = binary.Crypt4GHDynamicCompressedArchive
-                                attributes["enable_crypt4gh_transparent_staging"] = (
-                                    enable_crypt4gh_transparent_staging
-                                )
+                                attributes["enable_crypt4gh_transparent_staging"] = enable_crypt4gh_transparent_staging
                                 attributes["compressed_format"] = "crypt4gh"
                                 attributes["display_peek"] = binary.Crypt4GHDynamicCompressedArchive.display_peek
                                 attributes["set_meta"] = binary.Crypt4GHDynamicCompressedArchive.set_meta
@@ -497,7 +495,7 @@ class Registry:
                     "sniff_prefix": binary.Crypt4GHDynamicCompressedArchive.sniff_prefix,
                 }
                 crypt4gh_type_name = f"{base_datatype_class_name}{inner_auto_compressed_type.capitalize()}Crypt4gh"
-                compressed_datatype_class: type[Data] = type(
+                crypt4gh_datatype_class: type[Data] = type(
                     crypt4gh_type_name,
                     (
                         base_datatype_class,
@@ -507,15 +505,15 @@ class Registry:
                     attributes,
                 )
                 if edam_format:
-                    compressed_datatype_class.edam_format = edam_format
+                    crypt4gh_datatype_class.edam_format = edam_format
                 if edam_data:
-                    compressed_datatype_class.edam_data = edam_data
-                compressed_datatype_instance = compressed_datatype_class()
+                    crypt4gh_datatype_class.edam_data = edam_data
+                compressed_datatype_instance = crypt4gh_datatype_class()
                 self.datatypes_by_extension[crypt4gh_extension] = compressed_datatype_instance
                 for suffix in infer_from_suffixes:
-                    self.datatypes_by_suffix_inferences[
-                        f"{suffix}.{inner_auto_compressed_type}.crypt4gh"
-                    ] = compressed_datatype_instance
+                    self.datatypes_by_suffix_inferences[f"{suffix}.{inner_auto_compressed_type}.crypt4gh"] = (
+                        compressed_datatype_instance
+                    )
                 if display_in_upload and crypt4gh_extension not in self.upload_file_formats:
                     self.upload_file_formats.append(crypt4gh_extension)
                 self.datatype_info_dicts.append(
@@ -751,6 +749,48 @@ class Registry:
     def get_datatype_by_extension(self, ext) -> Optional["Data"]:
         """Returns a datatype object based on an extension"""
         return self.datatypes_by_extension.get(ext, None)
+
+    def get_or_create_crypt4gh_datatype(self, base_ext: str) -> Optional["Data"]:
+        """Return ``{base_ext}.crypt4gh`` datatype, creating it on demand.
+
+        This enables transparent crypt4gh wrapping for outputs whose base
+        datatype does not declare ``auto_compressed_types=\"crypt4gh\"`` in XML.
+        """
+        encrypted_ext = f"{base_ext}.crypt4gh"
+        if encrypted_ext in self.datatypes_by_extension:
+            return self.datatypes_by_extension[encrypted_ext]
+
+        base_datatype_instance = self.datatypes_by_extension.get(base_ext)
+        if base_datatype_instance is None:
+            return None
+
+        datatype_class = base_datatype_instance.__class__
+        datatype_class_name = datatype_class.__name__
+        attributes: dict[str, Any] = {
+            "file_ext": encrypted_ext,
+            "compressed_format": "crypt4gh",
+            "enable_crypt4gh_transparent_staging": bool(
+                getattr(self.config, "enable_crypt4gh_transparent_staging", False)
+            ),
+            "uncompressed_datatype_instance": base_datatype_instance,
+            "display_peek": binary.Crypt4GHDynamicCompressedArchive.display_peek,
+            "set_meta": binary.Crypt4GHDynamicCompressedArchive.set_meta,
+            "set_peek": binary.Crypt4GHDynamicCompressedArchive.set_peek,
+            "sniff_prefix": binary.Crypt4GHDynamicCompressedArchive.sniff_prefix,
+        }
+
+        crypt4gh_datatype_class: type[Data] = type(
+            f"{datatype_class_name}Crypt4ghRuntime",
+            (
+                datatype_class,
+                binary.Crypt4GHDynamicCompressedArchive,
+            ),
+            attributes,
+        )
+        crypt4gh_datatype_instance = crypt4gh_datatype_class()
+        self.datatypes_by_extension[encrypted_ext] = crypt4gh_datatype_instance
+        self.log.debug("Dynamically registered crypt4gh datatype: %s", encrypted_ext)
+        return crypt4gh_datatype_instance
 
     def change_datatype(self, data, ext):
         if data.extension != ext:

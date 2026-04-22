@@ -66,12 +66,16 @@ class RecryptResponse(BaseModel):
     crypt4gh_compute_keypair_expiration_date: str
 
 
+class UserPublicKeyResponse(BaseModel):
+    crypt4gh_public_key: str  # base64-encoded raw X25519 public key bytes
+
+
 # ---------------------------------------------------------------------------
 # Mock app factory
 # ---------------------------------------------------------------------------
 
 
-def build_mock_app(user_private_key_path: str, compute_public_key_path: str) -> FastAPI:
+def build_mock_app(user_private_key_path: str, compute_public_key_path: str, user_public_key_path: str) -> FastAPI:
     """Return a FastAPI app that re-encrypts crypt4gh headers for testing.
 
     The user's private key is used to decrypt the session key(s) from the
@@ -88,9 +92,13 @@ def build_mock_app(user_private_key_path: str, compute_public_key_path: str) -> 
     compute_public_key_path:
         Absolute or workspace-relative path to the compute node's Crypt4GH
         public key (``.pub`` file).
+    user_public_key_path:
+        Absolute or workspace-relative path to the user's Crypt4GH public key
+        (``.pub`` file) returned by the ``/user_public_key`` endpoint.
     """
     user_sk = get_private_key(user_private_key_path, lambda: b"")
     compute_pub = get_public_key(compute_public_key_path)
+    user_pub = get_public_key(user_public_key_path)
 
     app = FastAPI(title="mock-crypt4gh-recryptor", version="test")
 
@@ -142,6 +150,12 @@ def build_mock_app(user_private_key_path: str, compute_public_key_path: str) -> 
     def info() -> dict:
         return {"name": "mock-crypt4gh-recryptor", "version": "test"}
 
+    @app.get("/user_public_key", response_model=UserPublicKeyResponse)
+    def user_public_key(user_id: str) -> UserPublicKeyResponse:
+        if not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+        return UserPublicKeyResponse(crypt4gh_public_key=base64.b64encode(user_pub).decode("ascii"))
+
     return app
 
 
@@ -186,9 +200,15 @@ class MockRecryptorServer:
         srv.stop()
     """
 
-    def __init__(self, user_private_key_path: str, compute_public_key_path: str) -> None:
+    def __init__(
+        self,
+        user_private_key_path: str,
+        compute_public_key_path: str,
+        user_public_key_path: str | None = None,
+    ) -> None:
         self.user_private_key_path = user_private_key_path
         self.compute_public_key_path = compute_public_key_path
+        self.user_public_key_path = user_public_key_path or compute_public_key_path
         self.port: int = _find_free_port()
         self._server: Server | None = None
         self._thread: threading.Thread | None = None
@@ -200,7 +220,7 @@ class MockRecryptorServer:
 
     def start(self) -> None:
         """Start the mock server in a background daemon thread."""
-        app = build_mock_app(self.user_private_key_path, self.compute_public_key_path)
+        app = build_mock_app(self.user_private_key_path, self.compute_public_key_path, self.user_public_key_path)
         config = Config(app, host="127.0.0.1", port=self.port, log_level="warning")
         self._server = Server(config)
 

@@ -2026,6 +2026,65 @@ class MinimalJobWrapper(HasResourceParameters):
 
         self.sa_session.add(dataset)
 
+    def _apply_crypt4gh_marked_extensions(self, job: Job, output_dataset_associations) -> None:
+        """Apply encrypted extensions from marker files for all output dataset instances.
+
+        This runs after output collection/import so it works for both metadata
+        strategies and ensures the history-visible extension reflects encrypted
+        compute-side outputs.
+        """
+        marker_dir = os.path.join(self.working_directory, "_c4gh_stage", "outputs")
+        if not os.path.isdir(marker_dir):
+            return
+
+        for dataset_assoc in output_dataset_associations:
+            dataset_instances = (
+                dataset_assoc.dataset.dataset.history_associations + dataset_assoc.dataset.dataset.library_associations
+            )
+            for dataset in dataset_instances:
+                if dataset.dataset is None:
+                    continue
+                marker_path = os.path.join(marker_dir, f"ds_{dataset.dataset.id}.encrypted")
+                if not os.path.exists(marker_path):
+                    continue
+
+                encrypted_ext = None
+                try:
+                    with open(marker_path) as marker_fh:
+                        marker_ext = marker_fh.read().strip()
+                        if marker_ext:
+                            encrypted_ext = marker_ext
+                except Exception as e:
+                    log.exception("(%s) Failed to read marker file %s: %s", job.id, marker_path, e)
+                    continue
+
+                if not encrypted_ext:
+                    continue
+                if self.app.datatypes_registry.get_datatype_by_extension(encrypted_ext) is None:
+                    continue
+
+                if dataset.extension != encrypted_ext:
+                    self.app.datatypes_registry.change_datatype(dataset, encrypted_ext)
+                    try:
+                        # Recompute crypt4gh-specific metadata/peek after extension switch.
+                        dataset.datatype.set_meta(dataset, overwrite=True)
+                        dataset.datatype.set_peek(dataset)
+                    except Exception as e:
+                        log.exception(
+                            "(%s) Failed to refresh metadata for dataset_id=%s ext=%s: %s",
+                            job.id,
+                            dataset.dataset.id,
+                            encrypted_ext,
+                            e,
+                        )
+                    self.sa_session.add(dataset)
+                    log.debug(
+                        "(%s) Applied encrypted extension dataset_id=%s ext=%s",
+                        job.id,
+                        dataset.dataset.id,
+                        encrypted_ext,
+                    )
+
     def finish(
         self,
         tool_stdout,
@@ -2198,6 +2257,9 @@ class MinimalJobWrapper(HasResourceParameters):
                 ):
                     # We don't set datsets in error state to OK because discover_outputs may have already set the state to error
                     dataset_assoc.dataset.dataset.state = Dataset.states.OK
+
+        if final_job_state != job.states.ERROR:
+            self._apply_crypt4gh_marked_extensions(job, output_dataset_associations)
 
         if job.states.ERROR == final_job_state:
             for dataset_assoc in output_dataset_associations:
