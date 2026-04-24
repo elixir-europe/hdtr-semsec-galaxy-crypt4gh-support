@@ -39,6 +39,7 @@ from galaxy.util.checkers import (
     is_tar,
 )
 from galaxy.util.path import StrPath
+from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
 
 try:
     import pylibmagic  # noqa: F401  # isort:skip
@@ -598,7 +599,7 @@ def guess_ext_for_existing_dataset(
         for hint in (dataset_name, current_extension):
             if hint:
                 inferred_ext = guess_ext_from_file_name(hint, registry)
-                if inferred_ext.endswith(".crypt4gh"):
+                if inferred_ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
                     return inferred_ext
         return "binary"
     return guess_ext(file_prefix, registry.sniff_order, auto_decompress=auto_decompress)
@@ -837,6 +838,8 @@ def handle_compressed_file(
     in the case of a zip file), this is so lengthy decompression can be bypassed if there is invalid content in the
     first 32KB. Otherwise the caller should be checking content.
     """
+    from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
+
     CHUNK_SIZE = 2**20  # 1Mb
     is_compressed = False
     compressed_type = None
@@ -851,22 +854,15 @@ def handle_compressed_file(
         compressed_type = file_prefix.compressed_format
     if is_compressed and is_valid:
         if ext in AUTO_DETECT_EXTENSIONS:
-            crypt4gh_suffix_chain = uploaded_file_ext
-            if compressed_type == "crypt4gh" and not crypt4gh_suffix_chain:
-                file_basename = os.path.basename(file_prefix.filename).lower()
-                if "." in file_basename:
-                    crypt4gh_suffix_chain = file_basename.split(".", 1)[1]
-            if compressed_type == "crypt4gh" and crypt4gh_suffix_chain:
-                inferred_ext = datatypes_registry.get_datatype_from_filename(f"x.{crypt4gh_suffix_chain}").file_ext
-                if inferred_ext.endswith(".crypt4gh"):
-                    ext = inferred_ext
-                    keep_compressed = True
             if compressed_type == "crypt4gh":
+                ext = CRYPT4GH_DEFAULT_EXT # default
                 keep_compressed = True
-                if ext in AUTO_DETECT_EXTENSIONS:
-                    ext = "binary"
-            # attempt to sniff for a keep-compressed datatype (observing the sniff order)
-            if not keep_compressed and compressed_type != "crypt4gh":
+                if uploaded_file_ext:
+                    inferred_ext = datatypes_registry.get_datatype_from_filename(f"x.{uploaded_file_ext}").file_ext
+                    if inferred_ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
+                        ext = inferred_ext
+            else:
+                # attempt to sniff for a keep-compressed datatype (observing the sniff order)
                 sniff_datatypes = filter(lambda d: getattr(d, "compressed", False), datatypes_registry.sniff_order)
                 sniffed_ext = run_sniffers_raw(file_prefix, sniff_datatypes)
                 if sniffed_ext:
@@ -875,8 +871,8 @@ def handle_compressed_file(
         else:
             datatype = datatypes_registry.get_datatype_by_extension(ext)
             keep_compressed = getattr(datatype, "compressed", False)
-            if compressed_type == "crypt4gh":
-                crypt4gh_ext = f"{ext}.crypt4gh"
+            if compressed_type ==  "crypt4gh":
+                crypt4gh_ext = f"{ext}.{CRYPT4GH_DEFAULT_EXT}"
                 if crypt4gh_ext in datatypes_registry.datatypes_by_extension:
                     ext = crypt4gh_ext
                 keep_compressed = True

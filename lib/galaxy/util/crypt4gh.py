@@ -1,7 +1,7 @@
 import io
 import os
 
-CRYPT4GH_DEFAULT_EXT = 'crypt4gh'
+CRYPT4GH_DEFAULT_EXT = 'c4gh'
 CRYPT4GH_MAGIC_NUMBER_AND_VERSION = b'crypt4gh' + int.to_bytes(1, length=4, byteorder='little')
 
 

@@ -88,14 +88,14 @@ Wait until you see `Starting server in PID ...` and the UI is accessible at
 
 ## Step 4 — Upload a crypt4gh-encrypted file (Phase 1)
 
-The file `test-data/crypt4gh/test.fastqsanger.crypt4gh` is a real crypt4gh file
+The file `test-data/crypt4gh/test.fastqsanger.c4gh` is a real crypt4gh file
 containing a short FASTQ snippet, encrypted with the test user key.
 
 1. Open `http://localhost:8080` and log in (or use the default admin account).
 2. Click the **Upload** button (top-left of the tool panel).
 3. Click **Choose local file** and select:
     ```
-    test-data/crypt4gh/test.fastqsanger.crypt4gh
+    test-data/crypt4gh/test.fastqsanger.c4gh
     ```
 4. In the **Type** column leave it as `Auto-detect` — Galaxy should sniff the
    crypt4gh magic bytes and assign the type automatically.
@@ -105,7 +105,7 @@ containing a short FASTQ snippet, encrypted with the test user key.
 
 After upload completes, click the dataset name in the history to expand it:
 
-- **Type** should be `fastqsanger.crypt4gh` (not `binary` or `data`).
+- **Type** should be `fastqsanger.c4gh` (not `binary` or `data`).
 - Click the **ⓘ (info)** icon → **Dataset Details**. Under **Metadata** you
   should see a `crypt4gh_header` field containing a long base64-encoded string.
 - The peek / content view will show the file is encrypted (no readable text) —
@@ -117,7 +117,7 @@ After upload completes, click the dataset name in the history to expand it:
 
 1. In the tool search box type **FastQC** (or any tool that accepts
    `fastqsanger` input).
-2. In the input dataset selector, the `test.fastqsanger.crypt4gh` dataset
+2. In the input dataset selector, the `test.fastqsanger.c4gh` dataset
    should appear (because `enable_crypt4gh_transparent_staging: true` enables
    the `matches_any` gate).
 3. Select it and click **Run Tool**.
@@ -141,7 +141,7 @@ Look for the Python decrypt block **before** the tool command:
 "${GALAXY_VIRTUAL_ENV}/bin/python" -c "
 import crypt4gh.lib, crypt4gh.keys, os, sys
 sk = crypt4gh.keys.get_private_key('/path/to/compute_key.sec', lambda: b'')
-with open('/path/_c4gh_stage/ds_N/input.crypt4gh', 'rb') as inf, \
+with open('/path/_c4gh_stage/ds_N/input.c4gh', 'rb') as inf, \
      open('/path/_c4gh_stage/ds_N/input', 'wb') as outf:
     crypt4gh.lib.decrypt([(0, sk, None)], inf, outf)
 " || { echo 'crypt4gh decryption failed'; exit 1; }
@@ -158,8 +158,8 @@ exit $_CRYPT4GH_TOOL_EXIT
 Also verify the staged (re-encrypted) file and the decrypted file:
 
 ```bash
-find database/jobs_directory/000/${JOB_ID} -name "*.crypt4gh"
-# Should print: .../_c4gh_stage/ds_N/input.crypt4gh
+find database/jobs_directory/000/${JOB_ID} -name "*.c4gh"
+# Should print: .../_c4gh_stage/ds_N/input.c4gh
 
 # Manually decrypt the staged file to confirm it is valid:
 python - << 'EOF'
@@ -167,7 +167,7 @@ import sys, io
 import crypt4gh.lib
 from crypt4gh.keys import get_private_key
 
-staged = 'database/jobs_directory/000/1/_c4gh_stage/ds_1/input.crypt4gh'  # adjust path
+staged = 'database/jobs_directory/000/1/_c4gh_stage/ds_1/input.c4gh'  # adjust path
 compute_sk = get_private_key('test-data/crypt4gh/compute_key.sec', lambda: b'')
 
 with open(staged, 'rb') as f:
@@ -186,7 +186,7 @@ EOF
 
 After the job in Step 5 completes, inspect the same job script and outputs.
 
-1. Confirm the history output dataset type ends with `.crypt4gh`.
+1. Confirm the history output dataset type ends with `.c4gh`.
 2. Open dataset details and verify `metadata.crypt4gh_header` is populated.
 3. Inspect the job script for a post-tool encryption block (after `_CRYPT4GH_TOOL_EXIT=$?`) that invokes `crypt4gh.lib.encrypt`.
 4. Confirm plaintext output files are not left behind in the job working path after completion.
@@ -235,21 +235,21 @@ dataset disappears from tool inputs:
 
 1. Set `enable_crypt4gh_transparent_staging: false` in `config/galaxy.yml`.
 2. Restart Galaxy (`./run.sh`).
-3. Open the same FastQC tool — the `fastqsanger.crypt4gh` dataset should **not**
+3. Open the same FastQC tool — the `fastqsanger.c4gh` dataset should **not**
    appear in the input drop-down.
-4. Run a tool and verify outputs are no longer re-encrypted to `.crypt4gh`.
+4. Run a tool and verify outputs are no longer re-encrypted to `.c4gh`.
 5. Re-enable the flag and restart to restore normal behaviour.
 
 ---
 
 ## Key files reference
 
-| File                                           | Purpose                                                       |
-| ---------------------------------------------- | ------------------------------------------------------------- |
-| `test-data/crypt4gh/user_key.sec`              | User's private key (decrypts the test file)                   |
-| `test-data/crypt4gh/user_key.pub`              | User's public key                                             |
-| `test-data/crypt4gh/compute_key.sec`           | Compute node private key (set as `crypt4gh_compute_key_path`) |
-| `test-data/crypt4gh/compute_key.pub`           | Compute node public key (re-encryptor target)                 |
-| `test-data/crypt4gh/test.fastqsanger.crypt4gh` | Test FASTQ file encrypted with `user_key.pub`                 |
-| `test/unit/jobs/mock_recryptor_service.py`     | Mock re-encryptor service (FastAPI + uvicorn)                 |
-| `lib/galaxy/jobs/crypt4gh_staging.py`          | Staging utility called from `prepare_job`                     |
+| File                                       | Purpose                                                       |
+|--------------------------------------------| ------------------------------------------------------------- |
+| `test-data/crypt4gh/user_key.sec`          | User's private key (decrypts the test file)                   |
+| `test-data/crypt4gh/user_key.pub`          | User's public key                                             |
+| `test-data/crypt4gh/compute_key.sec`       | Compute node private key (set as `crypt4gh_compute_key_path`) |
+| `test-data/crypt4gh/compute_key.pub`       | Compute node public key (re-encryptor target)                 |
+| `test-data/crypt4gh/test.fastqsanger.c4gh` | Test FASTQ file encrypted with `user_key.pub`                 |
+| `test/unit/jobs/mock_recryptor_service.py` | Mock re-encryptor service (FastAPI + uvicorn)                 |
+| `lib/galaxy/jobs/crypt4gh_staging.py`      | Staging utility called from `prepare_job`                     |

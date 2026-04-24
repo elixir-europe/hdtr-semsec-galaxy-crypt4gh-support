@@ -114,7 +114,7 @@
       <display file="igb/bigwig.xml"/>
       <display file="igv/bigwig.xml"/>
     </datatype>
-    <datatype extension="crypt4gh" type="galaxy.datatypes.binary:Crypt4GHDynamicCompressedArchive" display_in_upload="true"/>
+    <datatype extension="c4gh" type="galaxy.datatypes.binary:Crypt4GHDynamicCompressedArchive" display_in_upload="true"/>
     <datatype extension="cxb" type="galaxy.datatypes.binary:Binary" mimetype="application/octet-stream" subclass="true" display_in_upload="true" description="Cuffquant output format"/>
     <datatype extension="chrint" type="galaxy.datatypes.interval:ChromatinInteractions" display_in_upload="true">
       <converter file="interval_to_bgzip_converter.xml" target_datatype="bgzip"/>

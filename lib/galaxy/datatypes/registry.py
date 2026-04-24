@@ -26,6 +26,7 @@ from galaxy.util import (
     RW_R__R__,
 )
 from galaxy.util.bunch import Bunch
+from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
 from galaxy.util.path import StrPath
 from . import (
     binary,
@@ -366,7 +367,7 @@ class Registry:
                         self.datatype_info_dicts.append(datatype_info_dict)
 
                         for auto_compressed_type in auto_compressed_types:
-                            compressed_extension = f"{extension}.{auto_compressed_type}"
+                            auto_compressed_ext = auto_compressed_type
                             upper_compressed_type = auto_compressed_type[0].upper() + auto_compressed_type[1:]
                             auto_compressed_type_name = datatype_class_name + upper_compressed_type
                             attributes: dict[str, Any] = {}
@@ -378,6 +379,7 @@ class Registry:
                                 dynamic_parent = binary.Bz2DynamicCompressedArchive
                             elif auto_compressed_type == "crypt4gh":
                                 dynamic_parent = binary.Crypt4GHDynamicCompressedArchive
+                                auto_compressed_ext = CRYPT4GH_DEFAULT_EXT
                                 attributes["enable_crypt4gh_transparent_staging"] = enable_crypt4gh_transparent_staging
                                 attributes["compressed_format"] = "crypt4gh"
                                 attributes["display_peek"] = binary.Crypt4GHDynamicCompressedArchive.display_peek
@@ -386,6 +388,8 @@ class Registry:
                                 attributes["sniff_prefix"] = binary.Crypt4GHDynamicCompressedArchive.sniff_prefix
                             else:
                                 raise ConfigurationError(f"Unknown auto compression type [{auto_compressed_type}]")
+
+                            compressed_extension = f"{extension}.{auto_compressed_ext}"
                             attributes["file_ext"] = compressed_extension
                             attributes["uncompressed_datatype_instance"] = datatype_instance
                             compressed_datatype_class: type[Data] = type(
@@ -403,7 +407,7 @@ class Registry:
                             compressed_datatype_instance = compressed_datatype_class()
                             self.datatypes_by_extension[compressed_extension] = compressed_datatype_instance
                             for suffix in infer_from_suffixes:
-                                self.datatypes_by_suffix_inferences[f"{suffix}.{auto_compressed_type}"] = (
+                                self.datatypes_by_suffix_inferences[f"{suffix}.{auto_compressed_ext}"] = (
                                     compressed_datatype_instance
                                 )
                             if display_in_upload and compressed_extension not in self.upload_file_formats:
@@ -481,7 +485,7 @@ class Registry:
                 sniff_compressed_types = nested_target["sniff_compressed_types"]
                 upload_warning_template = nested_target["upload_warning_template"]
 
-                crypt4gh_extension = f"{inner_extension}.crypt4gh"
+                crypt4gh_extension = f"{inner_extension}.{CRYPT4GH_DEFAULT_EXT}"
                 if crypt4gh_extension in self.datatypes_by_extension:
                     continue
                 attributes = {
@@ -511,7 +515,7 @@ class Registry:
                 compressed_datatype_instance = crypt4gh_datatype_class()
                 self.datatypes_by_extension[crypt4gh_extension] = compressed_datatype_instance
                 for suffix in infer_from_suffixes:
-                    self.datatypes_by_suffix_inferences[f"{suffix}.{inner_auto_compressed_type}.crypt4gh"] = (
+                    self.datatypes_by_suffix_inferences[f"{suffix}.{inner_auto_compressed_type}.{CRYPT4GH_DEFAULT_EXT}"] = (
                         compressed_datatype_instance
                     )
                 if display_in_upload and crypt4gh_extension not in self.upload_file_formats:
@@ -523,7 +527,7 @@ class Registry:
                         "description": description,
                         "description_url": description_url,
                         "upload_warning": upload_warning(
-                            upload_warning_template, f"{inner_auto_compressed_type}.crypt4gh"
+                            upload_warning_template, f"{inner_auto_compressed_type}.{CRYPT4GH_DEFAULT_EXT}"
                         ),
                     }
                 )
@@ -752,12 +756,12 @@ class Registry:
         return self.datatypes_by_extension.get(ext, None)
 
     def get_or_create_crypt4gh_datatype(self, base_ext: str) -> Optional["Data"]:
-        """Return ``{base_ext}.crypt4gh`` datatype, creating it on demand.
+        """Return ``{base_ext}.c4gh`` datatype, creating it on demand.
 
         This enables transparent crypt4gh wrapping for outputs whose base
         datatype does not declare ``auto_compressed_types=\"crypt4gh\"`` in XML.
         """
-        encrypted_ext = f"{base_ext}.crypt4gh"
+        encrypted_ext = f"{base_ext}.{CRYPT4GH_DEFAULT_EXT}"
         if encrypted_ext in self.datatypes_by_extension:
             return self.datatypes_by_extension[encrypted_ext]
 

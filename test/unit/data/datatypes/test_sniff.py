@@ -111,15 +111,15 @@ def test_infer_from_filename():
     assert datatypes_registry.get_datatype_from_filename("mycool.fq").file_ext == "fastqsanger"
     assert datatypes_registry.get_datatype_from_filename("mycool.fq.gz").file_ext == "fastqsanger.gz"
     assert datatypes_registry.get_datatype_from_filename("mycool.fastq").file_ext == "fastqsanger"
-    assert datatypes_registry.get_datatype_from_filename("mycool.fastq.crypt4gh").file_ext == "fastqsanger.crypt4gh"
+    assert datatypes_registry.get_datatype_from_filename("mycool.fastq.c4gh").file_ext == "fastqsanger.c4gh"
     assert (
-        datatypes_registry.get_datatype_from_filename("mycool.fastq.gz.crypt4gh").file_ext
-        == "fastqsanger.gz.crypt4gh"
+        datatypes_registry.get_datatype_from_filename("mycool.fastq.gz.c4gh").file_ext
+        == "fastqsanger.gz.c4gh"
     )
 
 
 def test_crypt4gh_detection():
-    crypt4gh_fname = get_test_fname("1.fastqsanger.crypt4gh")
+    crypt4gh_fname = get_test_fname("1.fastqsanger.c4gh")
     plain_fastq_fname = get_test_fname("1.fastqsanger")
     assert is_crypt4gh(crypt4gh_fname)
     assert not is_crypt4gh(plain_fastq_fname)
@@ -127,11 +127,11 @@ def test_crypt4gh_detection():
 
 def test_guess_ext_for_existing_dataset_crypt4gh_uses_hints():
     datatypes_registry = example_datatype_registry_for_sample()
-    crypt4gh_fname = get_test_fname("1.fastqsanger.crypt4gh")
+    crypt4gh_fname = get_test_fname("1.fastqsanger.c4gh")
     assert (
         guess_ext_for_existing_dataset(
-            crypt4gh_fname, datatypes_registry, dataset_name="uploaded.fastqsanger.crypt4gh"
+            crypt4gh_fname, datatypes_registry, dataset_name="uploaded.fastqsanger.c4gh"
         )
-        == "fastqsanger.crypt4gh"
+        == "fastqsanger.c4gh"
     )
     assert guess_ext_for_existing_dataset(crypt4gh_fname, datatypes_registry, dataset_name="uploaded") == "binary"

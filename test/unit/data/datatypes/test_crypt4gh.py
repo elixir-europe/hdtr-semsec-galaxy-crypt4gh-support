@@ -49,22 +49,22 @@ def c4gh_loader() -> Crypt4GHDynamicCompressedArchive:
 
 @pytest.fixture
 def c4gh_data_complete() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-complete.crypt4gh", 1, read_contents=False)
+    return _get_input_file_info("data-complete.c4gh", 1, read_contents=False)
 
 
 @pytest.fixture
 def c4gh_data_header() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-header.crypt4gh", 2, read_contents=True)
+    return _get_input_file_info("data-header.c4gh", 2, read_contents=True)
 
 
 @pytest.fixture
 def c4gh_data_payload() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-payload.crypt4gh", 3, read_contents=True)
+    return _get_input_file_info("data-payload.c4gh", 3, read_contents=True)
 
 
 @pytest.fixture
 def c4gh_data_header_recrypted() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-header-recrypted.crypt4gh", 4, read_contents=True)
+    return _get_input_file_info("data-header-recrypted.c4gh", 4, read_contents=True)
 
 
 def test_crypt4gh_peek(c4gh_loader, c4gh_data_complete):

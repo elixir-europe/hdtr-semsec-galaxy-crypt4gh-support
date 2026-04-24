@@ -20,9 +20,9 @@ When a user uploads Crypt4GH-encrypted data of any relevant type (e.g. fastq, ba
 - **Guess** the format of the decrypted data from the file extension (or record the user-declared format, like for deferred data)
 - **Make no attempt** to do anything with the contained data because it will be unreadable
 
-This is analogous to how Galaxy handles compressed datatypes with no auto-decompression. For example: user uploads file, says it's `fastqsanger`; Galaxy finds it's actually crypt4gh; records the type as `fastqsanger.crypt4gh`.
+This is analogous to how Galaxy handles compressed datatypes with no auto-decompression. For example: user uploads file, says it's `fastqsanger`; Galaxy finds it's actually crypt4gh; records the type as `fastqsanger.c4gh`.
 
-Then, at the tool-level, if a tool accepts `fastqsanger` and `fastqsanger.gz` as input, it should automatically and transparently accept `fastqsanger.crypt4gh` and `fastqsanger.gz.crypt4gh` as well — without rewriting tool wrappers.
+Then, at the tool-level, if a tool accepts `fastqsanger` and `fastqsanger.gz` as input, it should automatically and transparently accept `fastqsanger.c4gh` and `fastqsanger.gz.c4gh` as well — without rewriting tool wrappers.
 
 ## Re-encryptor Service Architecture
 
@@ -148,18 +148,18 @@ Add `crypt4gh` to `auto_compressed_types` for:
 
 - `fastq`, `fastqsanger`, `fastqillumina`, `fastqsolexa`, `fastqcssanger`
 - `fasta`
-- `vcf` (plain VCF — `vcf.crypt4gh`; `vcf.gz.crypt4gh` is addressed below)
+- `vcf` (plain VCF — `vcf.c4gh`; `vcf.gz.c4gh` is addressed below)
 - `cram`
 
 Example: `<datatype extension="fastqsanger" auto_compressed_types="gz,bz2,crypt4gh" ...>`
 
-### 7. Double-wrapped types: `fastqsanger.gz.crypt4gh`
+### 7. Double-wrapped types: `fastqsanger.gz.c4gh`
 
 The dynamically-generated `fastqsanger.gz` datatype is not a static `<datatype>` entry in the XML, so it does not receive `auto_compressed_types` processing in the main loop. A second registry pass is required.
 
-**Implementation:** After the main datatype loop, iterate over all `DynamicCompressedArchive` instances (gz/bz2) that were generated from base types which had `crypt4gh` in their `auto_compressed_types` list. For each such instance (e.g. `fastqsanger.gz`), generate a `{ext}.crypt4gh` variant using `Crypt4GHDynamicCompressedArchive` as the outer compression wrapper.
+**Implementation:** After the main datatype loop, iterate over all `DynamicCompressedArchive` instances (gz/bz2) that were generated from base types which had `crypt4gh` in their `auto_compressed_types` list. For each such instance (e.g. `fastqsanger.gz`), generate a `{ext}.c4gh` variant using `Crypt4GHDynamicCompressedArchive` as the outer compression wrapper.
 
-**Critical — `uncompressed_datatype_instance`:** For `fastqsanger.gz.crypt4gh`, the `uncompressed_datatype_instance` attribute must point to the **`fastqsanger.gz`** instance (the gz-compressed type), not the plain `fastqsanger` instance. This ensures `matches_any` correctly checks gz compatibility when matching against gz-accepting tool inputs.
+**Critical — `uncompressed_datatype_instance`:** For `fastqsanger.gz.c4gh`, the `uncompressed_datatype_instance` attribute must point to the **`fastqsanger.gz`** instance (the gz-compressed type), not the plain `fastqsanger` instance. This ensures `matches_any` correctly checks gz compatibility when matching against gz-accepting tool inputs.
 
 **Class hierarchy (MRO) ordering:** The generated class MRO must place the base content datatype first so that content-specific methods (e.g. FastqSanger's) take precedence:
 
@@ -168,7 +168,7 @@ type(
     "FastqSangerGzCrypt4gh",
     (FastqSanger, GzDynamicCompressedArchive, Crypt4GHDynamicCompressedArchive),
     {
-        "file_ext": "fastqsanger.gz.crypt4gh",
+        "file_ext": "fastqsanger.gz.c4gh",
         "compressed_format": "crypt4gh",
         "uncompressed_datatype_instance": fastqsanger_gz_instance,
     },
@@ -177,11 +177,11 @@ type(
 
 `sniff_prefix` must return `True` purely on `file_prefix.compressed_format == "crypt4gh"` — no attempt to peek at the gz stream inside.
 
-**Suffix inference:** The registry code at line ~394 automatically appends `.{auto_compressed_type}` to existing `infer_from` suffixes during the main loop. The second pass must do the same: a `.fastq.gz` suffix entry should become a `.fastq.gz.crypt4gh` entry pointing to `fastqsanger.gz.crypt4gh`. Ensure each base datatype in the XML already has the appropriate `<infer_from suffix="..."/>` child elements.
+**Suffix inference:** The registry code at line ~394 automatically appends `.{auto_compressed_type}` to existing `infer_from` suffixes during the main loop. The second pass must do the same: a `.fastq.gz` suffix entry should become a `.fastq.gz.c4gh` entry pointing to `fastqsanger.gz.c4gh`. Ensure each base datatype in the XML already has the appropriate `<infer_from suffix="..."/>` child elements.
 
 ### 8. `DynamicCompressedArchive.matches_any` gate in `lib/galaxy/datatypes/binary.py`
 
-The current `matches_any` falls through to `self.uncompressed_datatype_instance.matches_any(uncompressed_target_datatypes)`. For `fastqsanger.crypt4gh` this would check `fastqsanger.matches_any([fastqsanger])` → `True`, meaning crypt4gh datasets would silently pass to plaintext-expecting tools before any staging infrastructure exists.
+The current `matches_any` falls through to `self.uncompressed_datatype_instance.matches_any(uncompressed_target_datatypes)`. For `fastqsanger.c4gh` this would check `fastqsanger.matches_any([fastqsanger])` → `True`, meaning crypt4gh datasets would silently pass to plaintext-expecting tools before any staging infrastructure exists.
 
 Add a class-level attribute `requires_staging = True` to `Crypt4GHDynamicCompressedArchive`. Modify `matches_any` (in `DynamicCompressedArchive`) so that when `self.compressed_format == "crypt4gh"` and the Galaxy app config flag `enable_crypt4gh_transparent_staging` is **not** set, it returns `False` for any uncompressed target type.
 
@@ -193,8 +193,8 @@ Add a class-level attribute `requires_staging = True` to `Crypt4GHDynamicCompres
 
 Verify end-to-end that:
 
-- `sample.fastq.gz.crypt4gh` → `fastqsanger.gz.crypt4gh`
-- `sample.fastqsanger.crypt4gh` → `fastqsanger.crypt4gh`
+- `sample.fastq.gz.c4gh` → `fastqsanger.gz.c4gh`
+- `sample.fastqsanger.c4gh` → `fastqsanger.c4gh`
 
 Add explicit test assertions for both cases (see Step 11).
 
@@ -211,16 +211,16 @@ Generate minimal valid crypt4gh test files using the Python `crypt4gh` library a
 
 - `test/unit/data/datatypes/test_sniff.py`:
   - `is_crypt4gh()` returns `True` for the test file and `False` for a plain fastq
-  - `guess_ext` returns `fastqsanger.crypt4gh` for `.fastq.crypt4gh` extension
-  - `guess_ext` returns `fastqsanger.gz.crypt4gh` for `.fastq.gz.crypt4gh` extension
+  - `guess_ext` returns `fastqsanger.c4gh` for `.fastq.c4gh` extension
+  - `guess_ext` returns `fastqsanger.gz.c4gh` for `.fastq.gz.c4gh` extension
 - `test/unit/data/datatypes/test_datatypes_registry.py`:
-  - `fastqsanger.crypt4gh` is registered in `datatypes_by_extension`
-  - `fastqsanger.gz.crypt4gh` is registered (double-wrapped second pass)
+  - `fastqsanger.c4gh` is registered in `datatypes_by_extension`
+  - `fastqsanger.gz.c4gh` is registered (double-wrapped second pass)
   - `matches_any([fastqsanger])` returns `False` with staging disabled, `True` with staging enabled
   - `set_meta` populates `metadata.crypt4gh_header` (valid base64); body metadata is absent
   - No converters registered for `crypt4gh` in either direction
 - `lib/galaxy_test/api/test_tools_upload.py`:
-  - Upload a `.fastqsanger.crypt4gh` file; verify `file_ext == "fastqsanger.crypt4gh"`
+  - Upload a `.fastqsanger.c4gh` file; verify `file_ext == "fastqsanger.c4gh"`
   - Verify `metadata.crypt4gh_header` is populated and is valid base64
   - Verify no body metadata scan is triggered
 
@@ -300,7 +300,7 @@ kill $CRYPT4GHFS_PID
 
 ### 17. Galaxy config flag activation
 
-Set `enable_crypt4gh_transparent_staging: true` in `galaxy.yml` when Phase 2 is configured. This enables the `matches_any` fallthrough from Step 8, allowing tools accepting `fastqsanger` to also accept `fastqsanger.crypt4gh` inputs.
+Set `enable_crypt4gh_transparent_staging: true` in `galaxy.yml` when Phase 2 is configured. This enables the `matches_any` fallthrough from Step 8, allowing tools accepting `fastqsanger` to also accept `fastqsanger.c4gh` inputs.
 
 ### 18. Pulsar support
 
@@ -320,9 +320,9 @@ Introduce a per-history or per-dataset flag `encrypt_outputs_with_crypt4gh` (boo
 
 ### 21. Post-job output re-encryption hook
 
-In the job finish path (`job_wrapper.finish()`): for each output dataset belonging to a user with `encrypt_outputs_with_crypt4gh=True`, call a new `encrypt_output_as_crypt4gh(output_path, user_public_key)` function. This uses the Python `crypt4gh` library to encrypt the plain output file in place. The output dataset's `file_ext` is updated to `{original_ext}.crypt4gh`.
+In the job finish path (`job_wrapper.finish()`): for each output dataset belonging to a user with `encrypt_outputs_with_crypt4gh=True`, call a new `encrypt_output_as_crypt4gh(output_path, user_public_key)` function. This uses the Python `crypt4gh` library to encrypt the plain output file in place. The output dataset's `file_ext` is updated to `{original_ext}.c4gh`.
 
-**`set_meta` must run after encryption.** After the output file is encrypted, `set_meta` on the new `.crypt4gh` dataset must extract and store the header (as in Step 3). Without this, any future use of the output as a Phase 2 job input will fail because `metadata.crypt4gh_header` will be absent.
+**`set_meta` must run after encryption.** After the output file is encrypted, `set_meta` on the new `.c4gh` dataset must extract and store the header (as in Step 3). Without this, any future use of the output as a Phase 2 job input will fail because `metadata.crypt4gh_header` will be absent.
 
 ### 22. Crypt4GH re-encryption efficiency
 
@@ -352,7 +352,7 @@ Monitor upstream [EGA-archive/crypt4ghfs](https://github.com/EGA-archive/crypt4g
 ## Verification
 
 - **Phase 1 unit tests**: `pytest test/unit/data/datatypes/` — sniffer, registry, `matches_any` gating, `set_meta` header extraction, no converters registered
-- **Phase 1 API upload test**: upload `.fastqsanger.crypt4gh`, assert `file_ext`, `metadata.crypt4gh_header` populated, no body metadata errors: `pytest lib/galaxy_test/api/test_tools_upload.py`
+- **Phase 1 API upload test**: upload `.fastqsanger.c4gh`, assert `file_ext`, `metadata.crypt4gh_header` populated, no body metadata errors: `pytest lib/galaxy_test/api/test_tools_upload.py`
 - **Phase 2 integration test**: submit a job with a crypt4gh input on a local runner with a test key pair and a mock re-encryptor service; verify the tool receives plaintext via crypt4ghfs mount
-- **Phase 2 `matches_any`**: `fastqsanger.crypt4gh matches_any([fastqsanger])` = `False` when staging disabled, `True` when enabled
+- **Phase 2 `matches_any`**: `fastqsanger.c4gh matches_any([fastqsanger])` = `False` when staging disabled, `True` when enabled
 - **Phase 3 set_meta**: after output re-encryption, verify `metadata.crypt4gh_header` is populated on the output dataset and the dataset can be used as a Phase 2 job input

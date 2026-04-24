@@ -25,6 +25,8 @@ from typing import (
 import crypt4gh.header
 import requests
 
+from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
+
 if TYPE_CHECKING:
     from galaxy.model import DatasetInstance
 
@@ -43,7 +45,7 @@ class JobPreparationException(Exception):
 class StagedCrypt4GHInput:
     """All paths required to decrypt a staged crypt4gh input for a single dataset."""
 
-    #: Absolute path to the re-encrypted staged ``.crypt4gh`` file
+    #: Absolute path to the re-encrypted staged ``.c4gh`` file
     staged_path: str
     #: Absolute path to the source directory (contains the staged file)
     stage_dir: str
@@ -65,7 +67,7 @@ class StagedCrypt4GHOutput:
     plaintext_path: str
     #: Marker file created when encryption succeeds for this output
     encrypted_marker_path: str
-    #: Target encrypted extension used at finalize time (e.g. ``fastqsanger.crypt4gh``)
+    #: Target encrypted extension used at finalize time (e.g. ``fastqsanger.c4gh``)
     encrypted_ext: str
 
 
@@ -132,7 +134,7 @@ def prepare_crypt4gh_input(
     Parameters
     ----------
     dataset:
-        The input HDA/LDDA whose ``file_ext`` ends in ``.crypt4gh``.
+        The input HDA/LDDA whose ``file_ext`` ends in ``.c4gh``.
     reencryption_service_url:
         Base URL of the crypt4gh re-encryptor service user-mode endpoint.
     working_directory:
@@ -220,7 +222,7 @@ def prepare_crypt4gh_input(
 
     stage_dir = os.path.join(working_directory, "_c4gh_stage", f"ds_{ds_id}")
     os.makedirs(stage_dir, exist_ok=True)
-    staged_path = os.path.join(stage_dir, "input.crypt4gh")
+    staged_path = os.path.join(stage_dir, f"input.{CRYPT4GH_DEFAULT_EXT}")
     decrypted_path = os.path.join(stage_dir, _STAGED_INNER_NAME)
 
     try:
@@ -351,7 +353,7 @@ def build_crypt4gh_output_post_commands(
             "esk = bytes(_NaclPrivKey.generate()); "
             "keys = [(0, esk, pub)]; "
             f"src = {_py_str(so.plaintext_path)}; "
-            "tmp = src + '.crypt4gh.tmp'; "
+            "tmp = src + '.c4gh.tmp'; "
             "inf = open(src, 'rb'); outf = open(tmp, 'wb'); "
             "crypt4gh.lib.encrypt(keys, inf, outf); "
             "inf.close(); outf.close(); "
@@ -394,7 +396,7 @@ def plan_crypt4gh_output_staging(
             continue
 
         base_ext = dataset.ext
-        if base_ext.endswith(".crypt4gh"):
+        if base_ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
             # Already encrypted/typed as crypt4gh; avoid double wrapping.
             continue
 
@@ -408,7 +410,7 @@ def plan_crypt4gh_output_staging(
                 # Dynamic/discovered output with unknown ext at prepare time.
                 continue
 
-        encrypted_ext = f"{base_ext}.crypt4gh"
+        encrypted_ext = f"{base_ext}.{CRYPT4GH_DEFAULT_EXT}"
         encrypted_datatype = datatypes_registry.get_datatype_by_extension(encrypted_ext)
         if encrypted_datatype is None:
             encrypted_datatype = datatypes_registry.get_or_create_crypt4gh_datatype(base_ext)

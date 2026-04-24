@@ -128,11 +128,11 @@ def test_sniff_compressed_dynamic_datatypes_default_off():
 
 def test_crypt4gh_dynamic_datatypes_registration_and_converters():
     datatypes_registry = example_datatype_registry_for_sample()
-    assert "fastqsanger.crypt4gh" in datatypes_registry.datatypes_by_extension
-    assert "fastqsanger.gz.crypt4gh" in datatypes_registry.datatypes_by_extension
-    assert "fastqsanger.bz2.crypt4gh" in datatypes_registry.datatypes_by_extension
+    assert "fastqsanger.c4gh" in datatypes_registry.datatypes_by_extension
+    assert "fastqsanger.gz.c4gh" in datatypes_registry.datatypes_by_extension
+    assert "fastqsanger.bz2.c4gh" in datatypes_registry.datatypes_by_extension
 
-    fastq_gz_crypt4gh = datatypes_registry.get_datatype_by_extension("fastqsanger.gz.crypt4gh")
+    fastq_gz_crypt4gh = datatypes_registry.get_datatype_by_extension("fastqsanger.gz.c4gh")
     assert fastq_gz_crypt4gh.uncompressed_datatype_instance.file_ext == "fastqsanger.gz"
 
     converters_with_crypt4gh = [converter for converter in datatypes_registry.converters if "crypt4gh" in converter[0]]
@@ -141,11 +141,11 @@ def test_crypt4gh_dynamic_datatypes_registration_and_converters():
 
 def test_crypt4gh_runtime_wrapper_registration_for_missing_base_datatype_wrapper():
     datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
-    assert datatypes_registry.get_datatype_by_extension("fqtoc.crypt4gh") is None
+    assert datatypes_registry.get_datatype_by_extension("fqtoc.c4gh") is None
 
     runtime_datatype = datatypes_registry.get_or_create_crypt4gh_datatype("fqtoc")
     assert runtime_datatype is not None
-    assert runtime_datatype.file_ext == "fqtoc.crypt4gh"
+    assert runtime_datatype.file_ext == "fqtoc.c4gh"
     assert runtime_datatype.uncompressed_datatype_instance.file_ext == "fqtoc"
     assert runtime_datatype.enable_crypt4gh_transparent_staging is True
 
@@ -156,19 +156,19 @@ def test_crypt4gh_runtime_wrapper_registration_for_missing_base_datatype_wrapper
 def test_crypt4gh_matches_any_staging_gate():
     default_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=False)
     fastqsanger = default_registry.get_datatype_by_extension("fastqsanger")
-    fastqsanger_crypt4gh = default_registry.get_datatype_by_extension("fastqsanger.crypt4gh")
+    fastqsanger_crypt4gh = default_registry.get_datatype_by_extension("fastqsanger.c4gh")
     assert not fastqsanger_crypt4gh.matches_any([fastqsanger])
 
     staging_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
     fastqsanger_staging = staging_registry.get_datatype_by_extension("fastqsanger")
-    fastqsanger_crypt4gh_staging = staging_registry.get_datatype_by_extension("fastqsanger.crypt4gh")
+    fastqsanger_crypt4gh_staging = staging_registry.get_datatype_by_extension("fastqsanger.c4gh")
     assert fastqsanger_crypt4gh_staging.matches_any([fastqsanger_staging])
 
 
 def test_crypt4gh_set_meta_stores_header_only():
     datatypes_registry = example_datatype_registry_for_sample()
-    crypt4gh_datatype = datatypes_registry.get_datatype_by_extension("fastqsanger.crypt4gh")
-    with get_input_files("1.fastqsanger.crypt4gh") as input_files:
+    crypt4gh_datatype = datatypes_registry.get_datatype_by_extension("fastqsanger.c4gh")
+    with get_input_files("1.fastqsanger.c4gh") as input_files:
         dataset = MockDataset(1)
         dataset.set_file_name(input_files[0])
         dataset.dataset = MockDatasetDataset(dataset.get_file_name())

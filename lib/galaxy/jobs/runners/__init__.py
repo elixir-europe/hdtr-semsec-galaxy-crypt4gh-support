@@ -418,7 +418,7 @@ class BaseJobRunner:
             )
             staged_inputs.append(staged)
 
-        # Collect all outputs that should be persisted as *.crypt4gh.
+        # Collect all outputs that should be persisted as *.c4gh.
         outputs_to_working_directory = asbool(
             job_wrapper.get_destination_configuration(
                 "outputs_to_working_directory",
