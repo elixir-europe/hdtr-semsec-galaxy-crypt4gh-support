@@ -51,7 +51,7 @@ const showVisualizations = computed(() => {
 
 const showRecrypt = computed(() => {
     return (
-        props.item.extension == "c4gh" &&
+        (props.item.extension == "c4gh" || props.item.extension.endsWith(".c4gh")) &&
         props.item.state != "error" &&
         props.item.state != "failed_metadata" &&
         props.item.state != "upload" &&
