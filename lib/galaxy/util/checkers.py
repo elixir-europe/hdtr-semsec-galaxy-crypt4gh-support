@@ -179,20 +179,12 @@ def check_zip(file_path: str, check_content: bool = True, files=1) -> Tuple[bool
 def check_crypt4gh(file_path: str, check_content: bool = True) -> Tuple[bool, bool]:
     # This method returns a tuple of booleans representing (is_crypt4gh, is_valid)
     # We only inspect the public header bytes; body content is intentionally never parsed.
-    try:
-        with open(file_path, "rb") as temp:
-            magic_check = temp.read(8)
-            if magic_check != b"crypt4gh":
-                return (False, False)
-            version_bytes = temp.read(4)
-            if len(version_bytes) != 4:
-                return (False, False)
-            version = int.from_bytes(version_bytes, byteorder="little")
-            if version != 1:
-                return (False, False)
-    except Exception:
+    from galaxy.util.crypt4gh import is_valid_crypt4gh_file
+
+    if is_valid_crypt4gh_file(file_path):
+        return (True, True)
+    else:
         return (False, False)
-    return (True, True)
 
 
 def is_bz2(file_path: str) -> bool:

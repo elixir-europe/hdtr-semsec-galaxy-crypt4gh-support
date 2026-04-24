@@ -7,7 +7,7 @@ import pytest
 from typing import NamedTuple, Optional, Generator
 
 from galaxy.datatypes import sniff
-from galaxy.datatypes.binary import Crypt4ghEncryptedArchive
+from galaxy.datatypes.binary import Crypt4GHDynamicCompressedArchive
 from galaxy.datatypes.protocols import DatasetProtocol
 
 from .util import (
@@ -23,12 +23,12 @@ InputFileInfo = NamedTuple("InputFileInfo", [('dataset', DatasetProtocol),
 
 @contextmanager
 def _get_input_file_info(file_name: str, dataset_id: int, read_contents: bool) -> Generator[InputFileInfo, None, None]:
-    with get_input_files(file_name) as input_files:
+    with (get_input_files(file_name) as input_files):
         input_file_path = input_files[0]
 
         dataset = MockDataset(dataset_id)
-        dataset.file_name = input_file_path
-        dataset.dataset = MockDatasetDataset(dataset.file_name)
+        dataset.set_file_name(input_file_path)
+        dataset.dataset = MockDatasetDataset(dataset.get_file_name())
         dataset.metadata = MockMetadata()
 
         file_prefix = sniff.FilePrefix(input_file_path)
@@ -43,28 +43,28 @@ def _get_input_file_info(file_name: str, dataset_id: int, read_contents: bool) -
 
 
 @pytest.fixture
-def c4gh_loader() -> Crypt4ghEncryptedArchive:
-    return Crypt4ghEncryptedArchive()
+def c4gh_loader() -> Crypt4GHDynamicCompressedArchive:
+    return Crypt4GHDynamicCompressedArchive()
 
 
 @pytest.fixture
 def c4gh_data_complete() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-complete.c4gh", 1, read_contents=False)
+    return _get_input_file_info("data-complete.crypt4gh", 1, read_contents=False)
 
 
 @pytest.fixture
 def c4gh_data_header() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-header.c4gh", 2, read_contents=True)
+    return _get_input_file_info("data-header.crypt4gh", 2, read_contents=True)
 
 
 @pytest.fixture
 def c4gh_data_payload() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-payload.c4gh", 3, read_contents=True)
+    return _get_input_file_info("data-payload.crypt4gh", 3, read_contents=True)
 
 
 @pytest.fixture
 def c4gh_data_header_recrypted() -> Generator[InputFileInfo, None, None]:
-    return _get_input_file_info("data-header-recrypted.c4gh", 4, read_contents=True)
+    return _get_input_file_info("data-header-recrypted.crypt4gh", 4, read_contents=True)
 
 
 def test_crypt4gh_peek(c4gh_loader, c4gh_data_complete):
@@ -75,15 +75,15 @@ def test_crypt4gh_peek(c4gh_loader, c4gh_data_complete):
         assert dataset.blurb == "2.8 KB"
 
 
-def test_crypt4gh_sniff_prefix(c4gh_loader, c4gh_data_complete, c4gh_data_header, c4gh_data_payload):
+def test_crypt4gh_sniff_prefix(c4gh_loader: Crypt4GHDynamicCompressedArchive, c4gh_data_complete, c4gh_data_header, c4gh_data_payload):
     with c4gh_data_complete as data_complete:
-        assert c4gh_loader.sniff_prefix(data_complete.file_prefix) is True
+        assert c4gh_loader.sniff(data_complete.dataset.get_file_name()) is True
 
     with c4gh_data_header as data_header:
-        assert c4gh_loader.sniff_prefix(data_header.file_prefix) is False
+        assert c4gh_loader.sniff(data_header.dataset.get_file_name()) is False
 
     with c4gh_data_payload as data_payload:
-        assert c4gh_loader.sniff_prefix(data_payload.file_prefix) is False
+        assert c4gh_loader.sniff(data_payload.dataset.get_file_name()) is False
 
 
 def test_crypt4gh_set_meta(c4gh_loader, c4gh_data_complete, c4gh_data_header, c4gh_data_header_recrypted):
