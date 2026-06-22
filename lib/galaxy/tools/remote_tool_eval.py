@@ -26,6 +26,7 @@ from galaxy.tools import (
     create_tool_from_representation,
     evaluation,
 )
+from galaxy.tools.crypt4gh_remote_execution import setup_crypt4gh_remote_execution
 from galaxy.tools.data import (
     from_dict,
     ToolDataTableManager,
@@ -42,6 +43,7 @@ class ToolAppConfig(NamedTuple):
     builds_file_path: str
     root: str
     is_admin_user: Callable
+    enable_crypt4gh_transparent_staging: bool = False
     admin_users: list = []
 
 
@@ -96,6 +98,9 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         builds_file_path=job_io.builds_file_path,
         root=TMPDIR,
         is_admin_user=lambda _: job_io.user_context.is_admin,
+        enable_crypt4gh_transparent_staging=bool(
+            metadata_params.get("enable_crypt4gh_transparent_staging", False)
+        ),
     )
     with open(os.path.join(IMPORT_STORE_DIRECTORY, "tool_data_tables.json")) as data_tables_json:
         tdtm = from_dict(json.load(data_tables_json))
@@ -107,6 +112,13 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         tool_data_table_manager=tdtm,
         file_sources=job_io.file_sources,
     )
+    setup_crypt4gh_remote_execution(
+        job_io=job_io,
+        app_config=app.config,
+        destination_params=job_io.job.destination_params or {},
+    )
+    if job_io.tool_source is None or job_io.tool_source_class is None:
+        raise Exception("remote tool evaluation requires serialized tool source information")
     # TODO: could try to serialize just a minimal tool variant instead of the whole thing ?
     tool = create_tool_from_representation(
         app=app,
