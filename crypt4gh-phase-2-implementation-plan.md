@@ -17,6 +17,7 @@
   - Galaxy worktree: `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
   - Recryptor worktree: `/workspaces/dotfiles/repos/crypt4gh-recryptor-service/work/work/phase2-recryptor-routes`
 - Recryptor B must reuse the existing hashed directory linkage between `user_keys/` and `compute_keys/`; do not duplicate user-key knowledge.
+- Approved implementation detail for Task 2: persist a key-id lookup index under `compute_keys/index/<shard>/<key_id>.json` (shard = first two chars of key-id suffix, e.g. `cnk:abcde1234 -> ab/cnk:abcde1234.json`) with minimal metadata (`user_hash`, `expiration`) and immediate stale-entry deletion.
 - Final encrypted outputs are indicated by existing `.c4gh` dataset semantics plus `crypt4gh_header`; no new encrypted-at-rest metadata flag in this slice.
 - `lib/galaxy/tools/remote_tool_eval.py` stays a thin entrypoint; new Crypt4GH runtime logic belongs in a dedicated helper module.
 - Selected Galaxy-imported outputs must write plaintext only under `_crypt/outputs/`; normal published/imported paths must receive only reassembled encrypted files.
@@ -111,6 +112,8 @@ Minimum verification commands for the finished slice:
 - Modify: `src/crypt4gh_recryptor_service/crypt.py`
 
 - [ ] Implement reverse lookup from `crypt4gh_compute_keypair_id` back to the existing hashed user-key directory without duplicating stored user-key knowledge.
+- [ ] Implement reverse lookup using persisted key-id index entries at `compute_keys/index/<shard>/<key_id>.json` and fallback/backfill from hashed directory linkage when index entries are missing.
+- [ ] Enforce key-id index safety and integrity rules: validate key id path components, keep index metadata minimal (`user_hash`, `expiration`), and delete stale entries immediately when detected.
 - [ ] Implement compute-side header recryption to a supplied job public key and return the compute public key in the same response.
 - [ ] Implement compute-side header recryption back to the stored user public key using the existing hashed directory linkage.
 - [ ] Enforce fail-closed route behavior for unknown, expired, and undecryptable inputs.
@@ -326,7 +329,7 @@ Minimum verification commands for the finished slice:
 
 - **User Check-in A:** Pause if Galaxy's real output-import/discovery behavior makes it impossible to keep tool-visible plaintext entirely under `_crypt/outputs/` without a broader architecture change.
 - **User Check-in B:** Pause if `remote_tool_eval.py` cannot support the required non-Pulsar tracer bullet without changing the approved “thin entrypoint + dedicated helper” boundary.
-- **User Check-in C:** Pause if recryptor B needs a new persistent index or duplicated user-key metadata to resolve `crypt4gh_compute_keypair_id`; the approved assumption is to reuse the existing hashed directory linkage.
+- **User Check-in C:** Pause if recryptor B needs lookup state beyond the approved minimal key-id index metadata (`user_hash`, `expiration`) or cannot preserve hashed-directory linkage as source of truth.
 
 ## Follow-up work explicitly out of this plan
 
