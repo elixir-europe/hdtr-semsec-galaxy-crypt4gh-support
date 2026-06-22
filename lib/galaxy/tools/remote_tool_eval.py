@@ -78,14 +78,6 @@ class ToolApp(MinimalToolApp):
         return self._tool_data_tables
 
 
-def configure_crypt4gh_remote_execution(*, app: ToolApp, job_io: JobIO) -> None:
-    setup_crypt4gh_remote_execution(
-        job_io=job_io,
-        app_config=app.config,
-        destination_params=job_io.job.destination_params or {},
-    )
-
-
 def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     metadata_params = get_metadata_params(WORKING_DIRECTORY)
     datatypes_config = metadata_params["datatypes_config"]
@@ -120,7 +112,11 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         tool_data_table_manager=tdtm,
         file_sources=job_io.file_sources,
     )
-    configure_crypt4gh_remote_execution(app=app, job_io=job_io)
+    setup_crypt4gh_remote_execution(
+        job_io=job_io,
+        app_config=app.config,
+        destination_params=job_io.job.destination_params or {},
+    )
     if job_io.tool_source is None or job_io.tool_source_class is None:
         raise Exception("remote tool evaluation requires serialized tool source information")
     # TODO: could try to serialize just a minimal tool variant instead of the whole thing ?

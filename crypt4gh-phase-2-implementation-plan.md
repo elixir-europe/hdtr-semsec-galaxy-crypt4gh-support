@@ -138,8 +138,8 @@ Minimum verification commands for the finished slice:
 - [ ] Write failing unit tests for the execution-decision rules:
   - `enable_crypt4gh_transparent_staging` remains the top-level gate
   - the execution-side helper path is only valid when `tool_evaluation_strategy = remote`
-  - local minimum-TTL gate runs before any B call
   - helper setup failures fail closed
+  - `BaseJobRunner.prepare_job()` no longer owns Crypt4GH decrypt/encrypt wrapping when `tool_evaluation_strategy = remote`
 - [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q`
   Expected: FAIL with missing helper or decision-rule assertions.
 - [ ] Add `lib/galaxy/tools/crypt4gh_remote_execution.py` with the smallest helper skeleton needed to satisfy the decision-rule tests.
@@ -245,6 +245,8 @@ Minimum verification commands for the finished slice:
 - [ ] Extend the integration test module with discovered-dataset encryption after the declared-output slice is already green.
 - [ ] Extend the integration test module with fail-before-launch behavior when stored TTL is below threshold.
 - [ ] Extend the integration test module with fail-closed output finalization when a key expires mid-run.
+- [ ] Add/adjust unit coverage in `test/unit/jobs/test_crypt4gh_remote_execution.py` for the local minimum-TTL launch gate:
+  - local minimum-TTL gate runs before any B call
 - [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
   Expected: FAIL with discovered-output or expiry-behavior assertions.
 - [ ] Implement discovered-output selection using the same job-level encryption decision.

@@ -373,13 +373,8 @@ class BaseJobRunner:
             If staging is enabled and setup fails for required input/output
             crypt4gh operations.
         """
-        if not getattr(job_wrapper.app.config, "enable_crypt4gh_transparent_staging", False):
-            return command_line
-
-        # Task 3 freeze: once execution-side remote evaluation is active, the
-        # old prepare_job wrapping path must no longer own Crypt4GH staging.
-        if job_wrapper.get_destination_configuration("tool_evaluation_strategy") == "remote":
-            return command_line
+        # Task 3 freeze: prepare_job no longer owns Crypt4GH wrapping.
+        return command_line
 
         service_url: Optional[str] = getattr(job_wrapper.app.config, "crypt4gh_reencryption_service_url", None)
         if not service_url:

@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import (
     datetime,
     timedelta,
@@ -6,18 +5,12 @@ from datetime import (
 )
 from typing import (
     Any,
-    Callable,
     Optional,
 )
 
 
 class Crypt4GHRemoteExecutionError(Exception):
     """Raised when execution-side Crypt4GH setup must fail closed."""
-
-
-@dataclass(frozen=True)
-class Crypt4GHRemoteExecutionSetup:
-    enabled: bool
 
 
 def setup_crypt4gh_remote_execution(
@@ -27,8 +20,7 @@ def setup_crypt4gh_remote_execution(
     destination_params: dict[str, Any],
     minimum_ttl: timedelta = timedelta(hours=1),
     now: Optional[datetime] = None,
-    before_remote_call: Optional[Callable[[], None]] = None,
-) -> Crypt4GHRemoteExecutionSetup:
+) -> None:
     """Decide whether execution-side Crypt4GH setup is allowed for this job.
 
     The helper is intentionally small for the Task 3 contract:
@@ -39,26 +31,17 @@ def setup_crypt4gh_remote_execution(
     """
 
     if not bool(getattr(app_config, "enable_crypt4gh_transparent_staging", False)):
-        return Crypt4GHRemoteExecutionSetup(enabled=False)
+        return
 
     if destination_params.get("tool_evaluation_strategy") != "remote":
-        return Crypt4GHRemoteExecutionSetup(enabled=False)
+        return
 
     crypt4gh_inputs = tuple(_crypt4gh_inputs(job_io))
     if not crypt4gh_inputs:
-        return Crypt4GHRemoteExecutionSetup(enabled=False)
+        return
 
     current_time = now or datetime.now(timezone.utc)
     _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=minimum_ttl, now=current_time)
-
-    if before_remote_call is not None:
-        try:
-            before_remote_call()
-        except Exception as exc:
-            raise Crypt4GHRemoteExecutionError("Failed to initialize Crypt4GH remote execution helper") from exc
-
-    return Crypt4GHRemoteExecutionSetup(enabled=True)
-
 
 def _crypt4gh_inputs(job_io):
     for dataset in job_io.get_input_datasets():
