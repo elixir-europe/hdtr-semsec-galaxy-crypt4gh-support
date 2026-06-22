@@ -95,7 +95,7 @@ The execution-side helper is responsible for:
 - minting or loading the short-lived job-local execution keypair
 - coordinating with B for the second input-header recryption step
 - materializing plaintext input paths or decryptable local views for the tool
-- encrypting outputs into the B-managed temporary compute-key context before they are exported back into Galaxy-managed storage
+- encrypting selected Galaxy-imported outputs into the B-managed temporary compute-key context before they are exported back into Galaxy-managed storage
 - cleaning up plaintext intermediates and short-lived key material
 
 ### Chosen execution strategy
@@ -109,9 +109,9 @@ This keeps one runtime model across both deployment styles and avoids introducin
 
 ## Core runtime design
 
-### 1. Input preparation already implemented through A and B
+### 1. Upstream prerequisite: input preparation already happens outside this repo through A and B
 
-The current user-side flow remains the upstream prerequisite:
+This design assumes the following user-side flow already exists outside this repo and remains the upstream prerequisite:
 
 1. user imports a Crypt4GH file encrypted for their own keypair
 2. user runs A locally
@@ -178,12 +178,20 @@ Mount-based decrypted views may still be revisited later if they prove operation
 
 Tool outputs are treated as plaintext intermediates within the job-local crypto workspace.
 
+Selection rule for this slice:
+
+- selected outputs are every Galaxy-managed dataset artifact that the job would otherwise import into dataset storage when encrypted return is required for that job
+- this includes declared output datasets and discovered datasets that Galaxy will import as datasets
+- this excludes stdout/stderr, metadata sidecars, helper scratch files, and any other runtime artifact that is not imported into Galaxy dataset storage
+- the first tracer bullet uses a single job-level decision for imported datasets: if encrypted return is required, all Galaxy-imported dataset artifacts from that job are selected; mixed encrypted/plain final dataset imports are out of scope for this slice
+
 Before Galaxy re-imports or publishes them:
 
-1. the execution-side helper encrypts each selected output into the B-managed temporary compute-key context
-2. the helper sends the encrypted output header plus the compute key id to B
-3. B recrypts that output header from the compute-side temporary key context to the stored user public key
-4. Galaxy receives only the final encrypted-at-rest file with a user-readable Crypt4GH header
+1. the execution-side helper encrypts each selected plaintext output locally into a temporary Crypt4GH file under `_crypt/outputs/` using the compute public key associated with the still-valid compute key id
+2. the helper base64-encodes only that temporary file's Crypt4GH header bytes and sends the header string plus the compute key id to B
+3. B recrypts that header from the compute-side temporary key context to the stored user public key and returns only the replacement header string plus freshness metadata
+4. the helper reconstructs the final encrypted dataset locally by writing `returned_user_header + encrypted_body_from_step_1` to the final staged path
+5. Galaxy imports only that complete encrypted-at-rest file; B does not assemble or return whole-file artifacts in this slice
 
 The design goal is that no final exported dataset path in Galaxy points to plaintext content when encrypted return is required.
 
@@ -221,10 +229,17 @@ If additional metadata becomes necessary beyond the existing Crypt4GH metadata f
 - `enable_crypt4gh_transparent_staging` remains the top-level feature gate
 - `tool_evaluation_strategy = remote` is required so `remote_tool_eval.py` runs on the execution side
 - existing Crypt4GH dataset metadata fields determine which datasets need recryption/decryption behavior at runtime
-- the current `crypt4gh_reencryption_service_url` should continue to point at B unless a later compatibility slice deliberately renames it
+- `crypt4gh_reencryption_service_url` remains the config key for this slice for compatibility, but its schema/help text must be updated to say it points at compute-side recryptor B
 - `crypt4gh_compute_key_path` is part of the old design and should be removed from the final implementation because Galaxy must no longer hold a compute-side private key
 
 The implementation should prefer reusing these existing controls over inventing a second planning/configuration layer.
+
+### Compute-key expiry policy
+
+- this slice does not introduce a renewal mechanism for B-issued compute keys
+- minimum TTL assumption at job launch: the remaining compute-key lifetime must be at least the job destination walltime plus a one-hour buffer when walltime is known; otherwise operators must provision B with a minimum 24-hour TTL for eligible jobs
+- if the stored key is already expired or below the minimum TTL threshold when the helper contacts B, the job fails before tool launch
+- if a key still expires mid-run despite that guard, output finalization fails closed: B rejects the header rewrite, Galaxy imports no plaintext artifact, and the job is marked failed
 
 ## Execution deployment behavior
 
@@ -239,7 +254,7 @@ Responsibilities of the non-Pulsar adapter:
 - obtain the second-stage recrypted headers from B
 - materialize plaintext input files for tool-visible paths
 - rewrite the tool command to those plaintext paths
-- encrypt designated outputs to the B-managed temporary compute public key
+- encrypt selected Galaxy-imported outputs to the B-managed temporary compute public key
 - ask B to rewrite those output headers to the stored user public key
 - clean up plaintext and short-lived keys
 
@@ -257,6 +272,12 @@ Pulsar support should use the same metadata contract and the same `remote_tool_e
 
 The following route names and payloads are in scope for this design.
 
+Encoding rules for all schemas in this section:
+
+- every `crypt4gh_header` field is a base64-encoded ASCII string containing the raw Crypt4GH header bytes
+- every `*_public_key` field is a JSON string containing the exact UTF-8 text content of the corresponding Crypt4GH public-key file
+- no whole Crypt4GH body bytes are sent to B in this slice; only headers cross the REST boundary
+
 ### Verified current routes in the recryptor service
 
 Verified against the current `crypt4gh-recryptor-service` implementation:
@@ -267,13 +288,13 @@ Verified against the current `crypt4gh-recryptor-service` implementation:
     - request JSON:
       ```json
       {
-        "crypt4gh_header": "<crypt4gh header>"
+        "crypt4gh_header": "base64-encoded Crypt4GH header bytes"
       }
       ```
     - response JSON:
       ```json
       {
-        "crypt4gh_header": "<crypt4gh header>",
+        "crypt4gh_header": "base64-encoded Crypt4GH header bytes",
         "crypt4gh_compute_keypair_id": "<key id>",
         "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
       }
@@ -284,13 +305,13 @@ Verified against the current `crypt4gh-recryptor-service` implementation:
     - request JSON:
       ```json
       {
-        "crypt4gh_user_public_key": "<user public key>"
+        "crypt4gh_user_public_key": "literal Crypt4GH user public-key file contents as a UTF-8 string"
       }
       ```
     - response JSON:
       ```json
       {
-        "crypt4gh_compute_public_key": "<compute public key>",
+        "crypt4gh_compute_public_key": "literal Crypt4GH compute public-key file contents as a UTF-8 string",
         "crypt4gh_compute_keypair_id": "<key id>",
         "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
       }
@@ -302,23 +323,23 @@ Verified against the current `crypt4gh-recryptor-service` implementation:
 
 2. Add `POST /recrypt_header_to_job_key`
 
-   - request JSON:
-     ```json
-     {
-       "crypt4gh_header": "<crypt4gh header>",
-       "crypt4gh_compute_keypair_id": "<key id>",
-       "crypt4gh_job_public_key": "<job public key>"
-     }
-     ```
+    - request JSON:
+      ```json
+      {
+        "crypt4gh_header": "base64-encoded Crypt4GH header bytes",
+        "crypt4gh_compute_keypair_id": "<key id>",
+        "crypt4gh_job_public_key": "literal job Crypt4GH public-key file contents as a UTF-8 string"
+      }
+      ```
 
-   - response JSON:
-     ```json
-     {
-       "crypt4gh_header": "<crypt4gh header>",
-       "crypt4gh_compute_public_key": "<compute public key>",
-       "crypt4gh_compute_keypair_id": "<key id>",
-       "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
-     }
+    - response JSON:
+      ```json
+      {
+        "crypt4gh_header": "base64-encoded Crypt4GH header bytes",
+        "crypt4gh_compute_public_key": "literal Crypt4GH compute public-key file contents as a UTF-8 string",
+        "crypt4gh_compute_keypair_id": "<key id>",
+        "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
+      }
      ```
 
    - behavior:
@@ -328,21 +349,21 @@ Verified against the current `crypt4gh-recryptor-service` implementation:
 
 3. Add `POST /recrypt_header_to_user_key`
 
-   - request JSON:
-     ```json
-     {
-       "crypt4gh_header": "<crypt4gh header>",
-       "crypt4gh_compute_keypair_id": "<key id>"
-     }
-     ```
+    - request JSON:
+      ```json
+      {
+        "crypt4gh_header": "base64-encoded Crypt4GH header bytes",
+        "crypt4gh_compute_keypair_id": "<key id>"
+      }
+      ```
 
-   - response JSON:
-     ```json
-     {
-       "crypt4gh_header": "<crypt4gh header>",
-       "crypt4gh_compute_keypair_id": "<key id>",
-       "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
-     }
+    - response JSON:
+      ```json
+      {
+        "crypt4gh_header": "base64-encoded Crypt4GH header bytes",
+        "crypt4gh_compute_keypair_id": "<key id>",
+        "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
+      }
      ```
 
    - behavior:
@@ -356,10 +377,12 @@ No new user-side routes are required for this slice.
 
 The current implementation contains orchestrator-side code that should not survive this redesign.
 
-- remove `_apply_crypt4gh_staging()` from `BaseJobRunner.prepare_job()` once the execution-side replacement is in place
-- remove shell-wrapper logic and tests that assume `prepare_job()` authors decrypt/encrypt behavior on the orchestrator
-- remove Galaxy's dependency on `crypt4gh_compute_key_path`, because Galaxy must no longer hold the compute-side private key
-- remove or rewrite manual-testing and staging code that assumes a Galaxy-held compute private key or FUSE-first workflow
+- remove `lib/galaxy/jobs/crypt4gh_staging.py`
+- remove `_apply_crypt4gh_staging()` from `BaseJobRunner.prepare_job()` in `lib/galaxy/jobs/runners/__init__.py` once the execution-side replacement is in place
+- remove shell-wrapper logic and tests that assume `prepare_job()` authors decrypt/encrypt behavior on the orchestrator, including `test/unit/jobs/test_crypt4gh_staging.py`
+- remove Galaxy's dependency on `crypt4gh_compute_key_path` and `crypt4gh_compute_key_passphrase_env` from `lib/galaxy/config/schemas/config_schema.yml`, `lib/galaxy/config/sample/galaxy.yml.sample`, and `doc/source/admin/galaxy_options.rst`
+- update the schema/help text for `crypt4gh_reencryption_service_url` in those same config-doc surfaces so it explicitly describes compute-side recryptor B
+- remove or rewrite `test-data/crypt4gh/MANUAL_TESTING.md`, because it documents the old `prepare_job()` / `crypt4ghfs` / FUSE-first path
 
 ## Failure model
 
@@ -368,6 +391,7 @@ The design should fail closed.
 Required failure behavior:
 
 - expired or unknown compute-side key id -> fail before tool launch
+- compute-side key below the minimum TTL threshold at job start -> fail before tool launch
 - B unavailable or second recryption fails -> fail before plaintext materialization
 - execution-side helper unavailable -> do not silently fall back to ciphertext-as-plaintext path rewriting
 - output re-encryption failure -> fail the job and do not export plaintext as the final dataset artifact
@@ -400,20 +424,31 @@ Given the same job,
 When the tool produces output, then:
 
 - Galaxy does not import the plaintext file as the final dataset artifact
-- the execution-side helper encrypts the output to the B-managed temporary compute public key
-- B recrypts the output header to the stored user public key
-- Galaxy stores only the final encrypted output
+- only Galaxy-imported dataset outputs are selected for encryption in this slice
+- the execution-side helper encrypts each selected output to the B-managed temporary compute public key
+- B returns only a user-key-recrypted header, not a whole output file
+- the helper reassembles the final encrypted file locally and Galaxy stores only that final encrypted output
 
-### Acceptance test 3: fail-closed expired key
+### Acceptance test 3: fail-closed expired or insufficient-TTL key
 
-Given an expired compute-side key id,
+Given an expired compute-side key id or one below the minimum launch TTL,
 
 When the job starts, then:
 
 - the job fails before tool launch
 - no plaintext input path is materialized for the tool
 
-### Acceptance test 4: contract reuse for Pulsar
+### Acceptance test 4: fail-closed mid-run expiry during output finalization
+
+Given a key that was valid at launch but expires before output finalization,
+
+When the helper asks B to rewrite the output header to the user key, then:
+
+- B rejects the request
+- Galaxy imports no plaintext output artifact
+- the job is marked failed
+
+### Acceptance test 5: contract reuse for Pulsar
 
 Given the same dataset metadata and existing config,
 
@@ -421,14 +456,14 @@ When a Pulsar adapter is later added, then:
 
 - it can reuse the same `remote_tool_eval.py`-based flow without changing stored dataset semantics
 
-### Acceptance test 5: old prepare_job wrapper removed
+### Acceptance test 6: old prepare_job wrapper removed
 
 Given the execution-side redesign is enabled,
 
 When job preparation runs, then:
 
 - `BaseJobRunner.prepare_job()` no longer wraps commands with `_apply_crypt4gh_staging()`
-- Galaxy no longer requires `crypt4gh_compute_key_path`
+- Galaxy no longer requires `crypt4gh_compute_key_path` or `crypt4gh_compute_key_passphrase_env`
 
 ## Key decisions
 
@@ -440,6 +475,8 @@ When job preparation runs, then:
 | Drive execution from existing config plus standard dataset metadata | Reuses Galaxy's existing control surfaces and avoids inventing a second planning entity |
 | Materialize plaintext temp files first | Simplest first implementation behind `remote_tool_eval.py` |
 | Keep output return in B, not A | Lets B use the stored user public key bound to the compute key id and keeps A out of the return path |
+| Reassemble final encrypted output files locally in the execution helper | Keeps encrypted bodies on the compute side and limits B traffic to header-only operations |
+| No compute-key renewal in the first slice | Keeps the tracer bullet reversible and fail-closed; expiry is handled by minimum TTL checks plus job failure |
 | Support both deployment styles with the same `remote_tool_eval.py` model, but implement non-Pulsar first | Matches requested delivery order while keeping Pulsar changes minimal |
 | Fail closed on key/crypto/runtime errors | Prefer failed jobs over plaintext exposure |
 
