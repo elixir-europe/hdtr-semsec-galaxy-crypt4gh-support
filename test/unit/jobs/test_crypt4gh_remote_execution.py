@@ -77,6 +77,17 @@ def test_helper_setup_failures_incorrect_expiration_fail_closed():
             app_config=_Config(enable_crypt4gh_transparent_staging=True),
             destination_params={"tool_evaluation_strategy": "remote"},
         )
+
+def test_helper_setup_failures_no_expiration_time_zone_fail_closed():
+    dataset = _Dataset(_DatasetMetadata(crypt4gh_header="header", expiration="2024-06-02T12:00:00"))
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="timezone"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_transparent_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote"},
+        )
+
 def test_helper_setup_no_failures(crypt4gh_dataset):
     result = should_run_crypt4gh_remote_execution(
         job_io=_JobIO([crypt4gh_dataset]),

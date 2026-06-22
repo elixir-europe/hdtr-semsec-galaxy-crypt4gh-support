@@ -70,19 +70,18 @@ def _assert_minimum_ttl(*, datasets, minimum_ttl: timedelta, now: datetime) -> N
             )
 
 
-def _parse_expiration(expires_raw: Any) -> datetime:
+def _parse_expiration(expires_raw: datetime|str) -> datetime:
     if isinstance(expires_raw, datetime):
         expires_at = expires_raw
     elif isinstance(expires_raw, str):
-        normalized = expires_raw.replace("Z", "+00:00")
         try:
-            expires_at = datetime.fromisoformat(normalized)
+            expires_at = isoparse(expires_raw)
         except ValueError as exc:
             raise Crypt4GHRemoteExecutionError("Invalid Crypt4GH compute key expiration timestamp") from exc
     else:
         raise Crypt4GHRemoteExecutionError("Invalid Crypt4GH compute key expiration timestamp")
 
     if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
+        raise Crypt4GHRemoteExecutionError("Invalid Crypt4GH compute key expiration timestamp - timezone is lacking")
 
-    return expires_at.astimezone(timezone.utc)
+    return expires_at
