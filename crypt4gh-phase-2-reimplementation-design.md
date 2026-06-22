@@ -23,14 +23,14 @@ In scope:
 
 - replacement runtime design for encrypted input execution
 - replacement output re-encryption design
-- shared metadata/contract needed across Galaxy, A, and B
+- shared metadata/config/route contract needed across Galaxy, A, and B
 - non-Pulsar-first execution strategy
 - follow-on Pulsar-compatible architecture
+- exact REST route names and payload schemas for required recryptor changes, based on the current service implementation
 - acceptance-test definition for the first tracer bullet
 
 Out of scope for this design:
 
-- exact REST route names and payload schemas for recryptor changes
 - authentication details between Galaxy, A, and B
 - protection against malicious tool commands after plaintext is made available inside the trusted compute job
 - Phase 1 datatype sniffing and metadata extraction already covered by the previous work
@@ -55,9 +55,9 @@ Important nuance for non-Pulsar-first support: some deployments may run orchestr
 Galaxy is responsible for:
 
 - storing encrypted datasets
-- storing dataset metadata needed for later recryption/execution
-- recording which inputs require Crypt4GH handling
-- emitting a **declarative crypto execution plan** with the job
+- storing standard dataset metadata needed for later recryption/execution
+- deciding whether Crypt4GH execution handling is needed from existing config plus dataset metadata
+- passing existing job context into execution-side logic behind `remote_tool_eval.py`
 - importing only encrypted outputs back into normal dataset storage
 
 Galaxy is not responsible for:
@@ -74,7 +74,6 @@ A is responsible for:
 - using user-side private material
 - obtaining compute-side temporary public-key information from B
 - recrypting input headers from the user key context into the compute-side temporary key context
-- participating in the return path from Galaxy-accessible encrypted outputs back to the user's own keypair
 
 #### Recryptor B: compute-side REST service
 
@@ -82,29 +81,31 @@ B is responsible for:
 
 - minting and holding time-bounded compute-side private keys
 - associating those keys with key ids and expiration metadata
+- storing the user public key association for each issued compute-side key id
 - transforming headers from the B-managed temporary key context into a job-local execution key context
+- recrypting output headers from the compute-side temporary key context back to the stored user public key
 - never disclosing B-managed private keys to Galaxy or the job runtime
 
 #### Execution-side Crypt4GH helper
 
 The execution-side helper is responsible for:
 
-- consuming Galaxy's declarative crypto execution plan
+- consuming ordinary Galaxy job context, config, and dataset metadata
 - creating a per-job crypto workspace
 - minting or loading the short-lived job-local execution keypair
 - coordinating with B for the second input-header recryption step
 - materializing plaintext input paths or decryptable local views for the tool
-- encrypting outputs before they are exported back into Galaxy-managed storage
+- encrypting outputs into the B-managed temporary compute-key context before they are exported back into Galaxy-managed storage
 - cleaning up plaintext intermediates and short-lived key material
 
 ### Chosen execution strategy
 
-Use a **shared crypto contract with two runtime adapters**:
+Use one **shared metadata-driven execution model** behind `remote_tool_eval.py`:
 
-1. **Non-Pulsar first:** execution-side logic behind `remote_tool_eval.py`
-2. **Pulsar later:** Pulsar-native staging/finalization/runtime integration using the same metadata contract
+1. **Non-Pulsar first:** implement and verify the execution-side logic here first
+2. **Pulsar later:** reuse the same mechanism and avoid Pulsar setup changes beyond ensuring `remote_tool_eval.py` runs on the compute node
 
-This preserves one common design without forcing one brittle runtime hook across both deployment models.
+This keeps one runtime model across both deployment styles and avoids introducing a separate job-plan artifact.
 
 ## Core runtime design
 
@@ -179,9 +180,10 @@ Tool outputs are treated as plaintext intermediates within the job-local crypto 
 
 Before Galaxy re-imports or publishes them:
 
-1. the execution-side helper encrypts each selected output into the job-local execution key context
-2. the encrypted output header is then recrypted into the user-return context
-3. Galaxy receives only encrypted-at-rest files plus the metadata needed for later user-side recovery
+1. the execution-side helper encrypts each selected output into the B-managed temporary compute-key context
+2. the helper sends the encrypted output header plus the compute key id to B
+3. B recrypts that output header from the compute-side temporary key context to the stored user public key
+4. Galaxy receives only the final encrypted-at-rest file with a user-readable Crypt4GH header
 
 The design goal is that no final exported dataset path in Galaxy points to plaintext content when encrypted return is required.
 
@@ -190,13 +192,13 @@ The design goal is that no final exported dataset path in Galaxy points to plain
 The return path must stay consistent with the two-recryptor model:
 
 - Galaxy should store an encrypted output in a form recoverable through recryption, not in plaintext
-- A remains the user-facing recryption bridge from Galaxy-visible encrypted state to the user's final keypair
+- B, not A, should complete the output-header recryption back to the user's public key
 
-The exact ownership of the user-return temporary key context belongs in the A/B service contract, but Galaxy's role is only to preserve the encrypted artifact plus metadata required to continue that flow.
+The user-side service A is still part of the input-side browser-local flow, but it is not part of the output return path in this redesign.
 
-## Shared metadata and job contract
+## Shared metadata, config, and execution decisions
 
-Galaxy should standardize a runtime contract that is independent of non-Pulsar vs Pulsar execution.
+Galaxy should drive runtime behavior from existing config plus standard dataset metadata, not from a new standalone crypto-plan object.
 
 ### Dataset metadata contract
 
@@ -209,22 +211,22 @@ For Crypt4GH job inputs, Galaxy should persist at least:
 
 For encrypted outputs returned to Galaxy, Galaxy should persist at least:
 
-- encrypted header suitable for the user-return flow
-- metadata linking the output to its return/recryption context
+- the final encrypted header after B has recrypted it to the user's public key
 - indication that the dataset is encrypted-at-rest and must not be treated as plaintext
 
-### Declarative crypto execution plan
+If additional metadata becomes necessary beyond the existing Crypt4GH metadata fields, it should be added as ordinary Galaxy dataset metadata only after confirming that it is generally acceptable in Galaxy, not as a one-off ad hoc job blob.
 
-Galaxy should attach a job-scoped plan describing:
+### Execution decision rules
 
-- which inputs require Crypt4GH handling
-- where each tool-visible plaintext path should appear
-- which outputs must be re-encrypted before export
-- any required key ids / expirations / policy flags
+- `enable_crypt4gh_transparent_staging` remains the top-level feature gate
+- `tool_evaluation_strategy = remote` is required so `remote_tool_eval.py` runs on the execution side
+- existing Crypt4GH dataset metadata fields determine which datasets need recryption/decryption behavior at runtime
+- the current `crypt4gh_reencryption_service_url` should continue to point at B unless a later compatibility slice deliberately renames it
+- `crypt4gh_compute_key_path` is part of the old design and should be removed from the final implementation because Galaxy must no longer hold a compute-side private key
 
-This plan is intentionally declarative. It describes **what** crypto handling is required, not **how** shell commands should be wrapped on the orchestrator.
+The implementation should prefer reusing these existing controls over inventing a second planning/configuration layer.
 
-## Deployment-specific adapters
+## Execution deployment behavior
 
 ### Non-Pulsar first
 
@@ -232,38 +234,132 @@ The first implementation should use `tool_evaluation_strategy = remote` and exec
 
 Responsibilities of the non-Pulsar adapter:
 
-- load the declarative crypto execution plan
+- load the relevant dataset metadata and existing config settings
 - allocate the per-job crypto workspace
 - obtain the second-stage recrypted headers from B
 - materialize plaintext input files for tool-visible paths
 - rewrite the tool command to those plaintext paths
-- encrypt designated outputs before export
+- encrypt designated outputs to the B-managed temporary compute public key
+- ask B to rewrite those output headers to the stored user public key
 - clean up plaintext and short-lived keys
 
 This is the best first shared Galaxy-side execution hook identified by the findings and avoids the old orchestrator-side `_apply_crypt4gh_staging()` model.
 
 ### Pulsar follow-on
 
-Pulsar support should use the same metadata contract and lifecycle, but enforcement should move into Pulsar-side responsibilities:
+Pulsar support should use the same metadata contract and the same `remote_tool_eval.py`-driven execution behavior.
 
-- input staging/materialization
-- runtime/container launch policy
-- output finalization/collection
+- The preferred outcome is that no Pulsar service setup changes are required.
+- The only required behavior should be that `remote_tool_eval.py` runs on the compute node.
+- If compatibility fixes are required because the current Galaxy/Pulsar remote-command path is rough, those fixes should stay Galaxy-side and should not introduce a separate Pulsar-specific crypto architecture.
 
-This gives stronger compute-owned staging for Pulsar without forcing the non-Pulsar adapter to mimic Pulsar internals.
+## REST routes and payload schemas
 
-## Required external capabilities
+The following route names and payloads are in scope for this design.
 
-Galaxy's redesign depends on A/B gaining additional external capabilities beyond the currently implemented endpoints.
+### Verified current routes in the recryptor service
 
-At a minimum, the combined service contract must support:
+Verified against the current `crypt4gh-recryptor-service` implementation:
 
-- B validating a compute-side key id and rejecting expired ones
-- B recrypting an input header from the B-managed temporary key context into a job-local execution public key
-- a return-path mechanism so encrypted outputs can move from the job-local execution context into a user-return context without exposing the relevant private keys to Galaxy
-- A completing the final user-facing recryption step to the user's own keypair
+- **User mode**
+  - `GET /info`
+  - `POST /recrypt_header`
+    - request JSON:
+      ```json
+      {
+        "crypt4gh_header": "<crypt4gh header>"
+      }
+      ```
+    - response JSON:
+      ```json
+      {
+        "crypt4gh_header": "<crypt4gh header>",
+        "crypt4gh_compute_keypair_id": "<key id>",
+        "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
+      }
+      ```
+- **Compute mode**
+  - `GET /info`
+  - `POST /get_compute_key_info`
+    - request JSON:
+      ```json
+      {
+        "crypt4gh_user_public_key": "<user public key>"
+      }
+      ```
+    - response JSON:
+      ```json
+      {
+        "crypt4gh_compute_public_key": "<compute public key>",
+        "crypt4gh_compute_keypair_id": "<key id>",
+        "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
+      }
+      ```
 
-Exact route names, payloads, and service-to-service authentication are intentionally left to a separate cross-service API specification.
+### Required compute-side route changes
+
+1. `POST /get_compute_key_info` must additionally persist the submitted `crypt4gh_user_public_key` together with the issued `crypt4gh_compute_keypair_id`, so that B can later recrypt output headers back to the user key without involving A.
+
+2. Add `POST /recrypt_header_to_job_key`
+
+   - request JSON:
+     ```json
+     {
+       "crypt4gh_header": "<crypt4gh header>",
+       "crypt4gh_compute_keypair_id": "<key id>",
+       "crypt4gh_job_public_key": "<job public key>"
+     }
+     ```
+
+   - response JSON:
+     ```json
+     {
+       "crypt4gh_header": "<crypt4gh header>",
+       "crypt4gh_compute_public_key": "<compute public key>",
+       "crypt4gh_compute_keypair_id": "<key id>",
+       "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
+     }
+     ```
+
+   - behavior:
+     - reject unknown or expired `crypt4gh_compute_keypair_id`
+     - recrypt the input header from the B-managed temporary key context to the supplied job public key
+     - return the compute public key as part of the same response so the execution helper can later encrypt outputs back into the same compute-key context without adding another Galaxy metadata field or a second lookup route
+
+3. Add `POST /recrypt_header_to_user_key`
+
+   - request JSON:
+     ```json
+     {
+       "crypt4gh_header": "<crypt4gh header>",
+       "crypt4gh_compute_keypair_id": "<key id>"
+     }
+     ```
+
+   - response JSON:
+     ```json
+     {
+       "crypt4gh_header": "<crypt4gh header>",
+       "crypt4gh_compute_keypair_id": "<key id>",
+       "crypt4gh_compute_keypair_expiration_date": "<iso8601 datetime>"
+     }
+     ```
+
+   - behavior:
+     - reject unknown or expired `crypt4gh_compute_keypair_id`
+     - use the stored user public key associated with that key id
+     - recrypt the output header from the compute-side temporary key context to the user's public key
+
+No new user-side routes are required for this slice.
+
+## Required code removal and cleanup
+
+The current implementation contains orchestrator-side code that should not survive this redesign.
+
+- remove `_apply_crypt4gh_staging()` from `BaseJobRunner.prepare_job()` once the execution-side replacement is in place
+- remove shell-wrapper logic and tests that assume `prepare_job()` authors decrypt/encrypt behavior on the orchestrator
+- remove Galaxy's dependency on `crypt4gh_compute_key_path`, because Galaxy must no longer hold the compute-side private key
+- remove or rewrite manual-testing and staging code that assumes a Galaxy-held compute private key or FUSE-first workflow
 
 ## Failure model
 
@@ -304,8 +400,9 @@ Given the same job,
 When the tool produces output, then:
 
 - Galaxy does not import the plaintext file as the final dataset artifact
-- the output is encrypted before export back to Galaxy-managed storage
-- Galaxy stores only encrypted output plus return-path metadata
+- the execution-side helper encrypts the output to the B-managed temporary compute public key
+- B recrypts the output header to the stored user public key
+- Galaxy stores only the final encrypted output
 
 ### Acceptance test 3: fail-closed expired key
 
@@ -318,11 +415,20 @@ When the job starts, then:
 
 ### Acceptance test 4: contract reuse for Pulsar
 
-Given the same dataset metadata and declarative crypto execution plan,
+Given the same dataset metadata and existing config,
 
 When a Pulsar adapter is later added, then:
 
-- it can consume the same contract without changing stored dataset semantics
+- it can reuse the same `remote_tool_eval.py`-based flow without changing stored dataset semantics
+
+### Acceptance test 5: old prepare_job wrapper removed
+
+Given the execution-side redesign is enabled,
+
+When job preparation runs, then:
+
+- `BaseJobRunner.prepare_job()` no longer wraps commands with `_apply_crypt4gh_staging()`
+- Galaxy no longer requires `crypt4gh_compute_key_path`
 
 ## Key decisions
 
@@ -331,27 +437,26 @@ When a Pulsar adapter is later added, then:
 | Replace single re-encryptor assumption with A + B model | Matches the actual system concept and keeps private material on the correct side |
 | Replace orchestrator-side runtime wrapping with execution-side handling | Aligns with the trust findings and reduces orchestrator control over plaintext handling |
 | Use second-stage recryption into a job-local execution keypair | Lets B keep its temporary private keys while enabling per-job decrypt/encrypt |
-| Use declarative crypto plans from Galaxy | Supports both non-Pulsar and Pulsar without duplicating dataset semantics |
+| Drive execution from existing config plus standard dataset metadata | Reuses Galaxy's existing control surfaces and avoids inventing a second planning entity |
 | Materialize plaintext temp files first | Simplest first implementation behind `remote_tool_eval.py` |
-| Support both deployment styles, but implement non-Pulsar first | Matches requested delivery order and the current findings |
+| Keep output return in B, not A | Lets B use the stored user public key bound to the compute key id and keeps A out of the return path |
+| Support both deployment styles with the same `remote_tool_eval.py` model, but implement non-Pulsar first | Matches requested delivery order while keeping Pulsar changes minimal |
 | Fail closed on key/crypto/runtime errors | Prefer failed jobs over plaintext exposure |
 
 ## Risks and follow-up specs
 
 Known follow-up work that should be specified separately if this design is accepted:
 
-- exact A/B API additions and payloads
-- Galaxy job metadata schema for the declarative crypto execution plan
 - non-Pulsar implementation plan
-- Pulsar adapter implementation plan
+- Pulsar compatibility verification / implementation plan
 - operator/deployment documentation for trusted execution prerequisites
 
 ## User Check-in markers
 
 ### User Check-in 1
 
-Confirm before implementation planning that the shared-contract / two-adapter architecture remains the approved direction, rather than forcing one runtime hook across non-Pulsar and Pulsar.
+Confirm before implementation planning that existing config + dataset metadata, without a separate crypto-plan artifact, remains the approved execution-control model.
 
 ### User Check-in 2
 
-Confirm before implementation planning that output return should stay encrypted-at-rest in Galaxy and continue through an A-mediated return-to-user flow, rather than introducing any Galaxy-held long-lived user decryption key.
+Confirm before implementation planning that output return should stay encrypted-at-rest in Galaxy and that B, not A, should perform the final header recryption back to the user's public key.
