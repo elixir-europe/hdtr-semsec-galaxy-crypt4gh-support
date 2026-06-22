@@ -160,11 +160,11 @@ Minimum verification commands for the finished slice:
 
 - [ ] Wire `test/integration/test_crypt4gh_remote_execution.py` to load the existing `inheritance_simple` tool through `framework_tool_and_types = True` and `integration_tool_runner(["inheritance_simple"])`.
 - [ ] Configure the integration instance to set `enable_crypt4gh_transparent_staging = True` and `tool_evaluation_strategy = "remote"`.
-- [ ] Write the first failing integration tracer-bullet test around `inheritance_simple` and the mock/test B service.
+- [ ] Write the first failing integration tracer-bullet test around `inheritance_simple` and the mock/test B service, with explicit assertions that the tool-visible plaintext input path lives under `_crypt/inputs/`, the encrypted source dataset remains ciphertext at its normal storage path, and no sibling plaintext copy of that dataset is created elsewhere under the job working directory.
 - [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
-  Expected: FAIL because `inheritance_simple` still receives ciphertext or the remote helper path is not complete.
+  Expected: FAIL because `inheritance_simple` still receives ciphertext, the remote helper path is not complete, or the plaintext-location assertions are not yet satisfied.
 - [ ] Implement second-stage header recryption to a job-local keypair.
-- [ ] Implement plaintext materialization under `_crypt/inputs/`.
+- [ ] Implement plaintext materialization only under `_crypt/inputs/`, with no duplicate plaintext copy outside that subtree.
 - [ ] Implement tool-visible input path rewriting to the plaintext materialized files.
 - [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
   Expected: PASS.
@@ -209,7 +209,7 @@ Minimum verification commands for the finished slice:
 - [ ] Commit checkpoint in the Galaxy repo:
   `git add lib/galaxy/tools/crypt4gh_remote_execution.py lib/galaxy/datatypes/binary.py test/unit/data/datatypes/test_crypt4gh.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: finalize encrypted outputs for existing galaxy tools"`
 
-## Task 6: Cleanup reliability and cleanup-failure semantics
+## Task 6: Cleanup reliability and operator-attention cleanup-failure contract
 
 **Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
@@ -218,12 +218,12 @@ Minimum verification commands for the finished slice:
 - Modify: `test/unit/jobs/test_crypt4gh_remote_execution.py`
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
-- [ ] Extend unit tests so cleanup must still run after tool failure.
-- [ ] Extend unit or integration tests so cleanup failure preserves diagnostics and marks the job failed in a way that requires operator attention.
+- [ ] Extend unit tests so cleanup must still run after tool failure and the surfaced failure text still includes the original tool exception.
+- [ ] Extend unit and/or integration tests so cleanup failure has a concrete observable contract: the final job state is failed/error via `job_wrapper.fail(...)`, the failure text or captured log includes a fixed marker such as `CRYPT4GH_CLEANUP_FAILED`, and the surfaced diagnostics include both the original tool failure (if any) and the cleanup exception.
 - [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -k cleanup -q`
-  Expected: FAIL with missing cleanup-on-failure or operator-attention assertions.
+  Expected: FAIL with missing cleanup-on-failure, fixed-marker, or combined-diagnostics assertions.
 - [ ] Implement cleanup in a reliable post-run path that executes after both successful and failed tool runs.
-- [ ] Implement cleanup-failure handling that preserves failure diagnostics instead of hiding the original error.
+- [ ] Implement cleanup-failure handling that preserves failure diagnostics, emits the fixed operator-attention marker, and leaves the job in failed state instead of hiding the original error.
 - [ ] Re-run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -k cleanup -q`
   Expected: PASS.
 - [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
@@ -305,10 +305,12 @@ Minimum verification commands for the finished slice:
   - `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
   - `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
   Expected: PASS for all commands.
+- [ ] Define the live-service switch in `test/integration/test_crypt4gh_remote_execution.py` explicitly: `handle_galaxy_config_kwds` reads `GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL`; when set, it writes that value to `config["crypt4gh_reencryption_service_url"]` and skips any in-process mock-service startup so the same integration tests can target a real compute-mode service unchanged.
 - [ ] Run one live cross-repo smoke check against the real compute-mode service after the mock-based tests are green.
   Suggested shape:
   - start the real compute-mode FastAPI app from the recryptor worktree
-  - point the Galaxy integration test at that service instead of the mock B service
+  - export `GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL=http://127.0.0.1:<port>` (or the equivalent command-scoped environment assignment)
+  - point the Galaxy integration test at that service through the `handle_galaxy_config_kwds` → `crypt4gh_reencryption_service_url` hook instead of the mock B service
   - rerun `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
   - rerun `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
   Expected: PASS against the live service as well.
