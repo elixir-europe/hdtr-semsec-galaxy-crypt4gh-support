@@ -21,6 +21,7 @@
 - `lib/galaxy/tools/remote_tool_eval.py` stays a thin entrypoint; new Crypt4GH runtime logic belongs in a dedicated helper module.
 - Selected Galaxy-imported outputs must write plaintext only under `_crypt/outputs/`; normal published/imported paths must receive only reassembled encrypted files.
 - Discovered datasets are in scope, but only after the first declared-output tracer bullet is green.
+- Approved scope waiver for spec acceptance test 5: the user explicitly said `keep pulsar out of the plan (mention it as a follow-up)`, so Pulsar contract-reuse acceptance is deferred to follow-up work rather than required for green in this plan.
 
 ## Repo/file map
 
@@ -30,7 +31,6 @@
 - `lib/galaxy/tools/crypt4gh_remote_execution.py`
 - `test/unit/jobs/test_crypt4gh_remote_execution.py`
 - `test/integration/test_crypt4gh_remote_execution.py`
-- `test/functional/tools/crypt4gh_phase2_roundtrip.xml`
 
 **Modify:**
 - `lib/galaxy/tools/remote_tool_eval.py`
@@ -64,17 +64,21 @@
 Primary verification is test-first and contract-first:
 
 1. Recryptor route contract tests define the new B API.
-2. Galaxy unit tests define local TTL gating, metadata handling, path rewriting, and fail-closed cleanup behavior.
+2. Galaxy unit tests define execution-decision rules: `enable_crypt4gh_transparent_staging` as the top-level gate, `tool_evaluation_strategy = remote` as the required execution path, local TTL gating, and fail-closed cleanup behavior.
 3. Galaxy integration tests define the first non-Pulsar tracer bullet with a mock/test B service.
-4. Cleanup/config/doc changes are verified after behavior is green.
+4. The input-compatibility tracer uses the existing `test/functional/tools/inheritance_simple.xml` tool through the integration harness.
+5. The output-finalization tracer uses the existing `test/functional/tools/output_format.xml` tool through the integration harness.
+6. Cleanup/config/doc changes are verified after behavior is green.
 
 Minimum verification commands for the finished slice:
 
 - Recryptor repo: `poetry run pytest tests/test_compute_routes.py -q`
 - Galaxy unit: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py test/unit/data/datatypes/test_crypt4gh.py -q`
 - Galaxy integration: `pytest test/integration/test_crypt4gh_remote_execution.py test/integration/test_config_schema.py -q`
+- Input-compatibility tracer execution: `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
+- Output-finalization tracer execution: `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
 
-## Task 1: Recryptor B route contract tests
+## Task 1: Recryptor B route contract tests and route docs
 
 **Worktree:** `/workspaces/dotfiles/repos/crypt4gh-recryptor-service/work/work/phase2-recryptor-routes`
 
@@ -83,16 +87,19 @@ Minimum verification commands for the finished slice:
 - Modify: `src/crypt4gh_recryptor_service/models.py`
 - Modify: `README.md`
 
-- [ ] Write failing route-contract tests for:
-  - reused `POST /get_compute_key_info` behavior with persisted user-key linkage
+- [ ] Write failing route-contract tests in `tests/test_compute_routes.py` for:
+  - reused `POST /get_compute_key_info` behavior with hashed user-key linkage
   - new `POST /recrypt_header_to_job_key`
   - new `POST /recrypt_header_to_user_key`
   - HTTP contract: unknown key id = `404`, expired key id = `410`, malformed/undecryptable header = `422`
-- [ ] Verify the new tests fail with `poetry run pytest tests/test_compute_routes.py -q`.
-- [ ] Extend request/response models only as far as needed to support the contract.
-- [ ] Re-run `poetry run pytest tests/test_compute_routes.py -q` until green.
-- [ ] Refactor shared test helpers or model helpers if needed, then re-run the same test command.
-- [ ] Create a checkpoint commit in the recryptor repo once the route contract is stable.
+- [ ] Run: `poetry run pytest tests/test_compute_routes.py -q`
+  Expected: FAIL with missing-route or wrong-response assertions mentioning `/recrypt_header_to_job_key` and `/recrypt_header_to_user_key`.
+- [ ] Update `README.md` so the compute-mode API section names all three compute-side routes and the header-only contract.
+- [ ] Extend `src/crypt4gh_recryptor_service/models.py` only as far as needed to express the new request/response payloads.
+- [ ] Re-run: `poetry run pytest tests/test_compute_routes.py -q`
+  Expected: still FAIL, but only on unimplemented handler behavior rather than missing models/imports.
+- [ ] Commit checkpoint in the recryptor repo:
+  `git add tests/test_compute_routes.py src/crypt4gh_recryptor_service/models.py README.md && git commit -m "test: define recryptor compute route contract"`
 
 ## Task 2: Recryptor B route implementation on top of existing storage semantics
 
@@ -107,11 +114,15 @@ Minimum verification commands for the finished slice:
 - [ ] Implement compute-side header recryption to a supplied job public key and return the compute public key in the same response.
 - [ ] Implement compute-side header recryption back to the stored user public key using the existing hashed directory linkage.
 - [ ] Enforce fail-closed route behavior for unknown, expired, and undecryptable inputs.
-- [ ] Verify green with `poetry run pytest tests/test_compute_routes.py -q`.
-- [ ] Refactor any lookup/crypto helper duplication, then re-run the same command.
-- [ ] Create a checkpoint commit in the recryptor repo once B behavior is green.
+- [ ] Run: `poetry run pytest tests/test_compute_routes.py -q`
+  Expected: PASS.
+- [ ] Refactor any lookup/crypto helper duplication that was introduced by the minimal implementation.
+- [ ] Re-run: `poetry run pytest tests/test_compute_routes.py -q`
+  Expected: PASS.
+- [ ] Commit checkpoint in the recryptor repo:
+  `git add src/crypt4gh_recryptor_service/compute.py src/crypt4gh_recryptor_service/storage.py src/crypt4gh_recryptor_service/crypt.py tests/test_compute_routes.py README.md && git commit -m "feat: add recryptor compute header rewrite routes"`
 
-## Task 3: Galaxy helper contract and old-path freeze
+## Task 3: Galaxy helper contract, decision rules, and old-path freeze
 
 **Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
@@ -121,17 +132,23 @@ Minimum verification commands for the finished slice:
 - Modify: `lib/galaxy/tools/remote_tool_eval.py`
 - Modify: `lib/galaxy/jobs/runners/__init__.py`
 
-- [ ] Write failing unit tests that define:
-  - local minimum-TTL gate before any B call
-  - execution workspace layout under `_crypt/`
-  - explicit input path rewriting to plaintext materialized files
-  - fail-closed behavior when helper setup or B calls fail
-- [ ] Verify red with `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q`.
-- [ ] Add the thin `remote_tool_eval.py` handoff into a dedicated helper module.
+- [ ] Write failing unit tests for the execution-decision rules:
+  - `enable_crypt4gh_transparent_staging` remains the top-level gate
+  - the execution-side helper path is only valid when `tool_evaluation_strategy = remote`
+  - local minimum-TTL gate runs before any B call
+  - helper setup failures fail closed
+- [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q`
+  Expected: FAIL with missing helper or decision-rule assertions.
+- [ ] Add `lib/galaxy/tools/crypt4gh_remote_execution.py` with the smallest helper skeleton needed to satisfy the decision-rule tests.
+- [ ] Keep `lib/galaxy/tools/remote_tool_eval.py` thin by delegating into the new helper rather than growing new logic inline.
 - [ ] Stop `BaseJobRunner.prepare_job()` from owning Crypt4GH decrypt/encrypt wrapping once the execution-side helper path exists.
-- [ ] Re-run `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q` until green.
-- [ ] Refactor helper boundaries while keeping `remote_tool_eval.py` thin, then re-run the same test command.
-- [ ] Create a checkpoint commit in the Galaxy repo after the input-side helper contract is green.
+- [ ] Re-run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS for the decision-rule contract.
+- [ ] Refactor helper boundaries while keeping `remote_tool_eval.py` thin.
+- [ ] Re-run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Commit checkpoint in the Galaxy repo:
+  `git add lib/galaxy/tools/crypt4gh_remote_execution.py lib/galaxy/tools/remote_tool_eval.py lib/galaxy/jobs/runners/__init__.py test/unit/jobs/test_crypt4gh_remote_execution.py && git commit -m "test: define galaxy crypt4gh remote execution contract"`
 
 ## Task 4: Galaxy input-side tracer bullet in non-Pulsar remote evaluation
 
@@ -139,16 +156,25 @@ Minimum verification commands for the finished slice:
 
 **Files:**
 - Modify: `lib/galaxy/tools/crypt4gh_remote_execution.py`
-- Create: `test/functional/tools/crypt4gh_phase2_roundtrip.xml`
 - Create: `test/integration/test_crypt4gh_remote_execution.py`
 
-- [ ] Write the first failing integration tracer-bullet test for non-Pulsar remote execution with a mock/test B service.
-- [ ] Verify red with `pytest test/integration/test_crypt4gh_remote_execution.py -q`.
-- [ ] Implement second-stage header recryption to a job-local keypair, plaintext materialization under `_crypt/inputs/`, and tool-visible input path rewriting.
-- [ ] Verify that the tool receives only compute-local plaintext paths and that plaintext stays under `_crypt/`.
-- [ ] Re-run `pytest test/integration/test_crypt4gh_remote_execution.py -q` until the input-side slice is green.
-- [ ] Refactor helper/setup code if needed, then re-run the same test command.
-- [ ] Create a checkpoint commit for the first end-to-end input-side slice.
+- [ ] Wire `test/integration/test_crypt4gh_remote_execution.py` to load the existing `inheritance_simple` tool through `framework_tool_and_types = True` and `integration_tool_runner(["inheritance_simple"])`.
+- [ ] Configure the integration instance to set `enable_crypt4gh_transparent_staging = True` and `tool_evaluation_strategy = "remote"`.
+- [ ] Write the first failing integration tracer-bullet test around `inheritance_simple` and the mock/test B service.
+- [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: FAIL because `inheritance_simple` still receives ciphertext or the remote helper path is not complete.
+- [ ] Implement second-stage header recryption to a job-local keypair.
+- [ ] Implement plaintext materialization under `_crypt/inputs/`.
+- [ ] Implement tool-visible input path rewriting to the plaintext materialized files.
+- [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Run the explicit input tracer command: `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
+  Expected: PASS and the selected test output references the `inheritance_simple` tool.
+- [ ] Refactor helper/setup code if needed.
+- [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Commit checkpoint in the Galaxy repo:
+  `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: support crypt4gh input compatibility for existing fastq tools"`
 
 ## Task 5: Declared-output encrypted return path
 
@@ -160,18 +186,52 @@ Minimum verification commands for the finished slice:
 - Modify: `test/unit/data/datatypes/test_crypt4gh.py`
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
-- [ ] Extend the integration test so a declared Galaxy-imported output is written as plaintext only under `_crypt/outputs/` and published back as a final encrypted `.c4gh` artifact.
-- [ ] Add/adjust unit coverage for returned-output metadata expectations: preserve `crypt4gh_header`, keep `.c4gh` semantics, and do not retain compute-key id/expiry on final returned outputs in this slice.
-- [ ] Verify red with:
-  - `pytest test/unit/data/datatypes/test_crypt4gh.py -q`
-  - `pytest test/integration/test_crypt4gh_remote_execution.py -q`
-- [ ] Implement output selection for the first slice: if any input triggered Crypt4GH runtime handling, all declared Galaxy-imported dataset outputs in that job are encrypted for return.
-- [ ] Implement local encryption to the compute public key, header rewrite through B, and final encrypted-file reassembly on the publish/import path.
-- [ ] Re-run both commands until green.
-- [ ] Refactor output-path and metadata handling, then re-run both commands.
-- [ ] Create a checkpoint commit once declared-output encrypted return is green.
+- [ ] Extend the integration test so the existing `output_format` tool is loaded for the output tracer through `integration_tool_runner(["output_format"])`.
+- [ ] Extend the integration test so a declared Galaxy-imported output from `output_format` is selected for encryption once any input triggered Crypt4GH runtime handling.
+- [ ] Extend the integration test so selected plaintext output is written only under `_crypt/outputs/`.
+- [ ] Extend unit coverage for returned-output metadata expectations: preserve `crypt4gh_header`, keep `.c4gh` semantics, and do not retain compute-key id/expiry on final returned outputs in this slice.
+- [ ] Run: `pytest test/unit/data/datatypes/test_crypt4gh.py -q`
+  Expected: FAIL with metadata expectation mismatches for returned outputs.
+- [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: FAIL with `output_format` output-finalization assertions.
+- [ ] Implement job-level output selection for declared Galaxy-imported dataset outputs.
+- [ ] Implement local encryption of selected plaintext outputs to the compute public key.
+- [ ] Implement header rewrite through B and final encrypted-file reassembly on the publish/import path.
+- [ ] Re-run: `pytest test/unit/data/datatypes/test_crypt4gh.py -q`
+  Expected: PASS.
+- [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Run the explicit output tracer command: `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
+  Expected: PASS and the selected test output references the `output_format` tool.
+- [ ] Refactor output-path and metadata handling.
+- [ ] Re-run both commands.
+  Expected: PASS for both.
+- [ ] Commit checkpoint in the Galaxy repo:
+  `git add lib/galaxy/tools/crypt4gh_remote_execution.py lib/galaxy/datatypes/binary.py test/unit/data/datatypes/test_crypt4gh.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: finalize encrypted outputs for existing galaxy tools"`
 
-## Task 6: Discovered datasets and fail-closed expiry cases
+## Task 6: Cleanup reliability and cleanup-failure semantics
+
+**Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
+
+**Files:**
+- Modify: `lib/galaxy/tools/crypt4gh_remote_execution.py`
+- Modify: `test/unit/jobs/test_crypt4gh_remote_execution.py`
+- Modify: `test/integration/test_crypt4gh_remote_execution.py`
+
+- [ ] Extend unit tests so cleanup must still run after tool failure.
+- [ ] Extend unit or integration tests so cleanup failure preserves diagnostics and marks the job failed in a way that requires operator attention.
+- [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -k cleanup -q`
+  Expected: FAIL with missing cleanup-on-failure or operator-attention assertions.
+- [ ] Implement cleanup in a reliable post-run path that executes after both successful and failed tool runs.
+- [ ] Implement cleanup-failure handling that preserves failure diagnostics instead of hiding the original error.
+- [ ] Re-run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -k cleanup -q`
+  Expected: PASS.
+- [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS with no regression to the tracer-bullet path.
+- [ ] Commit checkpoint in the Galaxy repo:
+  `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/unit/jobs/test_crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: harden crypt4gh cleanup failure handling"`
+
+## Task 7: Discovered datasets and fail-closed expiry cases
 
 **Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
@@ -179,18 +239,23 @@ Minimum verification commands for the finished slice:
 - Modify: `lib/galaxy/tools/crypt4gh_remote_execution.py`
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
-- [ ] Extend the existing integration test module with:
-  - discovered-dataset encryption after the declared-output slice is already green
-  - fail-before-launch when stored TTL is below threshold
-  - fail-closed output-finalization when a key expires mid-run
-- [ ] Verify red with `pytest test/integration/test_crypt4gh_remote_execution.py -q`.
-- [ ] Implement discovered-output selection and finalization using the same job-level encryption decision.
-- [ ] Implement TTL preflight in Galaxy before B contact, while keeping B as the authority for unknown/expired route rejection.
-- [ ] Re-run `pytest test/integration/test_crypt4gh_remote_execution.py -q` until green.
-- [ ] Refactor any duplicated selection/finalization logic, then re-run the same command.
-- [ ] Create a checkpoint commit once discovered outputs and expiry behavior are green.
+- [ ] Extend the integration test module with discovered-dataset encryption after the declared-output slice is already green.
+- [ ] Extend the integration test module with fail-before-launch behavior when stored TTL is below threshold.
+- [ ] Extend the integration test module with fail-closed output finalization when a key expires mid-run.
+- [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: FAIL with discovered-output or expiry-behavior assertions.
+- [ ] Implement discovered-output selection using the same job-level encryption decision.
+- [ ] Implement Galaxy-side TTL preflight before the first B contact.
+- [ ] Implement fail-closed mid-run expiry handling during output finalization.
+- [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Refactor any duplicated selection or expiry logic.
+- [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Commit checkpoint in the Galaxy repo:
+  `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: cover discovered outputs and expiry failures"`
 
-## Task 7: Remove old staging path and update operator surfaces
+## Task 8: Remove old staging path and update operator/config surfaces
 
 **Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
@@ -203,27 +268,50 @@ Minimum verification commands for the finished slice:
 - Modify: `test/integration/test_config_schema.py`
 - Modify: `test-data/crypt4gh/MANUAL_TESTING.md`
 
-- [ ] Write or extend tests so config/schema validation fails until the old compute-private-key options are removed and `crypt4gh_reencryption_service_url` text is updated to describe compute-side recryptor B.
-- [ ] Verify red with `pytest test/integration/test_config_schema.py -q` if test changes are needed.
-- [ ] Remove the old compute-key config options and all remaining operator guidance that documents the `prepare_job()` / orchestrator-side staging design.
-- [ ] Replace manual-testing guidance so it matches the execution-side `_crypt/` model and header-only B interactions.
-- [ ] Re-run:
-  - `pytest test/integration/test_config_schema.py -q`
-  - `pytest test/unit/jobs/test_crypt4gh_remote_execution.py test/unit/data/datatypes/test_crypt4gh.py -q`
-  - `pytest test/integration/test_crypt4gh_remote_execution.py -q`
-- [ ] Refactor or delete any now-orphaned helpers/imports caused by removing the old staging path, then re-run the same verification commands.
-- [ ] Create a checkpoint commit once the old path is fully removed.
+- [ ] Extend `test/integration/test_config_schema.py` with an explicit assertion surface that:
+  - loads `lib/galaxy/config/schemas/config_schema.yml`
+  - asserts `enable_crypt4gh_transparent_staging` still exists
+  - asserts `crypt4gh_reencryption_service_url` still exists and its description mentions compute-side recryptor B
+  - asserts `crypt4gh_compute_key_path` and `crypt4gh_compute_key_passphrase_env` are absent
+- [ ] Run: `pytest test/integration/test_config_schema.py -q`
+  Expected: FAIL on at least one schema-surface assertion before the config/docs cleanup lands.
+- [ ] Delete the old orchestrator-side staging module and its old unit test.
+- [ ] Remove the old compute-private-key config options from schema, sample config, and admin docs.
+- [ ] Update `test-data/crypt4gh/MANUAL_TESTING.md` to document the execution-side `_crypt/` model and header-only B interactions.
+- [ ] Run: `pytest test/integration/test_config_schema.py -q`
+  Expected: PASS.
+- [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py test/unit/data/datatypes/test_crypt4gh.py -q`
+  Expected: PASS.
+- [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
+  Expected: PASS.
+- [ ] Refactor or delete any now-orphaned imports/helpers caused by removing the old staging path.
+- [ ] Re-run the same three commands.
+  Expected: PASS for all three.
+- [ ] Commit checkpoint in the Galaxy repo:
+  `git add lib/galaxy/config/schemas/config_schema.yml lib/galaxy/config/sample/galaxy.yml.sample doc/source/admin/galaxy_options.rst test/integration/test_config_schema.py test-data/crypt4gh/MANUAL_TESTING.md lib/galaxy/jobs/runners/__init__.py lib/galaxy/tools/crypt4gh_remote_execution.py test/unit/jobs/test_crypt4gh_remote_execution.py test/unit/data/datatypes/test_crypt4gh.py test/integration/test_crypt4gh_remote_execution.py && git rm lib/galaxy/jobs/crypt4gh_staging.py test/unit/jobs/test_crypt4gh_staging.py && git commit -m "refactor: remove legacy crypt4gh staging path"`
 
-## Task 8: Final verification and handoff
+## Task 9: Final verification, live smoke, and handoff
 
 **Galaxy worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
 **Recryptor worktree:** `/workspaces/dotfiles/repos/crypt4gh-recryptor-service/work/work/phase2-recryptor-routes`
 
-- [ ] Run fresh final verification in the recryptor repo: `poetry run pytest tests/test_compute_routes.py -q`.
+- [ ] Run fresh final verification in the recryptor repo:
+  `poetry run pytest tests/test_compute_routes.py -q`
+  Expected: PASS.
 - [ ] Run fresh final verification in the Galaxy repo:
   - `pytest test/unit/jobs/test_crypt4gh_remote_execution.py test/unit/data/datatypes/test_crypt4gh.py -q`
   - `pytest test/integration/test_crypt4gh_remote_execution.py test/integration/test_config_schema.py -q`
+  - `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
+  - `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
+  Expected: PASS for all commands.
+- [ ] Run one live cross-repo smoke check against the real compute-mode service after the mock-based tests are green.
+  Suggested shape:
+  - start the real compute-mode FastAPI app from the recryptor worktree
+  - point the Galaxy integration test at that service instead of the mock B service
+  - rerun `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
+  - rerun `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
+  Expected: PASS against the live service as well.
 - [ ] Confirm the deleted old-path files are absent and no remaining code path depends on `crypt4gh_compute_key_path` or `crypt4gh_compute_key_passphrase_env`.
 - [ ] Perform the mandatory refactor checkpoint in both repos; either apply small behavior-preserving cleanups or record that no refactor was needed.
 - [ ] Prepare a handoff note that includes:
