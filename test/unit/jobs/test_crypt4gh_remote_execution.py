@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 import pytest
 
 from galaxy.jobs.runners import BaseJobRunner
 from galaxy.tools.crypt4gh_remote_execution import (
     Crypt4GHRemoteExecutionError,
-    setup_crypt4gh_remote_execution,
+    should_run_crypt4gh_remote_execution,
 )
 
 
@@ -39,49 +39,56 @@ class _RunnerApp:
 
 
 class _RunnerJobWrapper:
-    def __init__(self, *, enable_crypt4gh_transparent_staging, tool_evaluation_strategy):
+    def __init__(self, *, enable_crypt4gh_transparent_staging):
         self.app = _RunnerApp(enable_crypt4gh_transparent_staging=enable_crypt4gh_transparent_staging)
-        self._tool_evaluation_strategy = tool_evaluation_strategy
-
-    def get_destination_configuration(self, key, default=None):
-        if key == "tool_evaluation_strategy":
-            return self._tool_evaluation_strategy
-        return default
 
 
-def test_top_level_gate_disables_remote_helper_setup():
-    result = setup_crypt4gh_remote_execution(
-        job_io=_JobIO([]),
+@pytest.fixture
+def crypt4gh_dataset():
+    return _Dataset(_DatasetMetadata(crypt4gh_header="header", expiration="2026-06-02T12:00:00+00:00"))
+
+
+def test_top_level_gate_disables_remote_helper_setup(crypt4gh_dataset):
+    result = should_run_crypt4gh_remote_execution(
+        job_io=_JobIO([crypt4gh_dataset]),
         app_config=_Config(enable_crypt4gh_transparent_staging=False),
         destination_params={"tool_evaluation_strategy": "remote"},
     )
 
-    assert result is None
+    assert result is False
 
 
-def test_helper_path_requires_remote_tool_evaluation_strategy():
-    result = setup_crypt4gh_remote_execution(
-        job_io=_JobIO([]),
+def test_helper_path_requires_remote_tool_evaluation_strategy(crypt4gh_dataset):
+    result = should_run_crypt4gh_remote_execution(
+        job_io=_JobIO([crypt4gh_dataset]),
         app_config=_Config(enable_crypt4gh_transparent_staging=True),
         destination_params={"tool_evaluation_strategy": "local"},
     )
 
-    assert result is None
+    assert result is False
 
 
-def test_helper_setup_failures_fail_closed():
+def test_helper_setup_failures_incorrect_expiration_fail_closed():
     dataset = _Dataset(_DatasetMetadata(crypt4gh_header="header", expiration="not-a-date"))
 
     with pytest.raises(Crypt4GHRemoteExecutionError, match="Invalid Crypt4GH compute key expiration timestamp"):
-        setup_crypt4gh_remote_execution(
+        should_run_crypt4gh_remote_execution(
             job_io=_JobIO([dataset]),
             app_config=_Config(enable_crypt4gh_transparent_staging=True),
             destination_params={"tool_evaluation_strategy": "remote"},
         )
+def test_helper_setup_no_failures(crypt4gh_dataset):
+    result = should_run_crypt4gh_remote_execution(
+        job_io=_JobIO([crypt4gh_dataset]),
+        app_config=_Config(enable_crypt4gh_transparent_staging=True),
+        destination_params={"tool_evaluation_strategy": "remote"},
+        now=datetime.fromisoformat("2026-06-01T11:00:00+00:00")
+    )
+    assert result is True
 
 
 def test_prepare_job_freezes_old_staging_path_when_remote_strategy_is_enabled():
-    job_wrapper = _RunnerJobWrapper(enable_crypt4gh_transparent_staging=True, tool_evaluation_strategy="remote")
+    job_wrapper = _RunnerJobWrapper(enable_crypt4gh_transparent_staging=True)
 
     command_line = BaseJobRunner._apply_crypt4gh_staging(object(), job_wrapper, "echo hello")
 

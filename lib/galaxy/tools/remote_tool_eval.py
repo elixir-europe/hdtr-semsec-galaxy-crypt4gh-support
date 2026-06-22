@@ -26,7 +26,7 @@ from galaxy.tools import (
     create_tool_from_representation,
     evaluation,
 )
-from galaxy.tools.crypt4gh_remote_execution import setup_crypt4gh_remote_execution
+from galaxy.tools.crypt4gh_remote_execution import should_run_crypt4gh_remote_execution
 from galaxy.tools.data import (
     from_dict,
     ToolDataTableManager,
@@ -112,13 +112,15 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         tool_data_table_manager=tdtm,
         file_sources=job_io.file_sources,
     )
-    setup_crypt4gh_remote_execution(
+    is_crypt4gh_job = should_run_crypt4gh_remote_execution(
         job_io=job_io,
         app_config=app.config,
         destination_params=job_io.job.destination_params or {},
     )
-    if job_io.tool_source is None or job_io.tool_source_class is None:
-        raise Exception("remote tool evaluation requires serialized tool source information")
+    if is_crypt4gh_job:
+        if job_io.tool_source is None or job_io.tool_source_class is None:
+            raise Exception("remote tool evaluation requires serialized tool source information")
+
     # TODO: could try to serialize just a minimal tool variant instead of the whole thing ?
     tool = create_tool_from_representation(
         app=app,

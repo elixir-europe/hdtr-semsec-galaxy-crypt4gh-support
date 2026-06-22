@@ -8,40 +8,43 @@ from typing import (
     Optional,
 )
 
+from dateutil.parser import isoparse
+
 
 class Crypt4GHRemoteExecutionError(Exception):
     """Raised when execution-side Crypt4GH setup must fail closed."""
 
 
-def setup_crypt4gh_remote_execution(
+def should_run_crypt4gh_remote_execution(
     *,
     job_io,
     app_config,
     destination_params: dict[str, Any],
-    minimum_ttl: timedelta = timedelta(hours=1),
+    minimum_ttl: timedelta = timedelta(days=1),
     now: Optional[datetime] = None,
-) -> None:
+) -> bool:
     """Decide whether execution-side Crypt4GH setup is allowed for this job.
 
     The helper is intentionally small for the Task 3 contract:
     - top-level gate: ``enable_crypt4gh_transparent_staging``
     - execution path only when ``tool_evaluation_strategy == "remote"``
-    - local minimum-TTL validation before any remote/B call
+    - only if at least one Crypt4GH input dataset is present
     - setup failures must fail closed
     """
 
     if not bool(getattr(app_config, "enable_crypt4gh_transparent_staging", False)):
-        return
+        return False
 
     if destination_params.get("tool_evaluation_strategy") != "remote":
-        return
+        return False
 
     crypt4gh_inputs = tuple(_crypt4gh_inputs(job_io))
     if not crypt4gh_inputs:
-        return
+        return False
 
     current_time = now or datetime.now(timezone.utc)
     _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=minimum_ttl, now=current_time)
+    return True
 
 def _crypt4gh_inputs(job_io):
     for dataset in job_io.get_input_datasets():
