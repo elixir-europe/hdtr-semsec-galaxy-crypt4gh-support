@@ -65,7 +65,7 @@
 Primary verification is test-first and contract-first:
 
 1. Recryptor route contract tests define the new B API.
-2. Galaxy unit tests define execution-decision rules: `enable_crypt4gh_transparent_staging` as the top-level gate, `tool_evaluation_strategy = remote` as the required execution path, local TTL gating, and fail-closed cleanup behavior.
+2. Galaxy unit tests define execution-decision rules: `enable_crypt4gh_transparent_staging` as the top-level gate, `tool_evaluation_strategy = remote` as the required execution path, at least one crypt4gh dataset input, local TTL gating, and fail-closed cleanup behavior.
 3. Galaxy integration tests define the first non-Pulsar tracer bullet with a mock/test B service.
 4. The input-compatibility tracer uses the existing `test/functional/tools/inheritance_simple.xml` tool through the integration harness.
 5. The output-finalization tracer uses the existing `test/functional/tools/output_format.xml` tool through the integration harness.
@@ -139,7 +139,6 @@ Minimum verification commands for the finished slice:
   - `enable_crypt4gh_transparent_staging` remains the top-level gate
   - the execution-side helper path is only valid when `tool_evaluation_strategy = remote`
   - helper setup failures fail closed
-  - `BaseJobRunner.prepare_job()` no longer owns Crypt4GH decrypt/encrypt wrapping when `tool_evaluation_strategy = remote`
 - [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -q`
   Expected: FAIL with missing helper or decision-rule assertions.
 - [ ] Add `lib/galaxy/tools/crypt4gh_remote_execution.py` with the smallest helper skeleton needed to satisfy the decision-rule tests.
@@ -242,6 +241,7 @@ Minimum verification commands for the finished slice:
 - Modify: `lib/galaxy/tools/crypt4gh_remote_execution.py`
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
+- Note: TTL guards were implemented in task 3 due to plan inconsistencies, but not thoroughly tested.
 - [ ] Extend the integration test module with discovered-dataset encryption after the declared-output slice is already green.
 - [ ] Extend the integration test module with fail-before-launch behavior when stored TTL is below threshold.
 - [ ] Extend the integration test module with fail-closed output finalization when a key expires mid-run.
