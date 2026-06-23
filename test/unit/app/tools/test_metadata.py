@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 
 from galaxy import model
@@ -160,6 +161,25 @@ class TestMetadata(TestCase, tools_support.UsesTools):
         self.exec_metadata_command(command)
         # Emulate job stuff here...
 
+    def test_extended_metadata_params_include_crypt4gh_remote_eval_settings(self):
+        self.app.config.metadata_strategy = "extended"
+        self.app.config.enable_crypt4gh_transparent_staging = True
+        self.app.config.crypt4gh_reencryption_service_url = "http://127.0.0.1:9999"
+
+        source_file_name = os.path.join(galaxy_directory(), "test/functional/tools/for_workflows/cat.xml")
+        self._init_tool_for_path(source_file_name)
+        output_dataset = self._create_output_dataset(extension="fasta")
+        self.app.model.session.commit()
+
+        self.metadata_command({"out_file1": output_dataset})
+
+        params_path = os.path.join(self.job_working_directory, "metadata", "params.json")
+        with open(params_path) as f:
+            metadata_params = json.load(f)
+
+        assert metadata_params["enable_crypt4gh_transparent_staging"] is True
+        assert metadata_params["crypt4gh_reencryption_service_url"] == "http://127.0.0.1:9999"
+
     def _create_output_dataset_collection(self, **kwd):
         output_dataset_collection = model.HistoryDatasetCollectionAssociation(**kwd)
         self.history.add_dataset_collection(output_dataset_collection)
@@ -228,6 +248,10 @@ class TestMetadata(TestCase, tools_support.UsesTools):
             job=self.job,
             object_store_conf=self.app.object_store.to_dict(),
             max_metadata_value_size=10000,
+            enable_crypt4gh_transparent_staging=bool(
+                getattr(self.app.config, "enable_crypt4gh_transparent_staging", False)
+            ),
+            crypt4gh_reencryption_service_url=getattr(self.app.config, "crypt4gh_reencryption_service_url", None),
         )
         return command
 

@@ -2638,6 +2638,10 @@ class MinimalJobWrapper(HasResourceParameters):
             max_discovered_files=self.app.config.max_discovered_files,
             validate_outputs=self.validate_outputs,
             link_data_only=self.__link_file_check(),
+            enable_crypt4gh_transparent_staging=bool(
+                getattr(self.app.config, "enable_crypt4gh_transparent_staging", False)
+            ),
+            crypt4gh_reencryption_service_url=getattr(self.app.config, "crypt4gh_reencryption_service_url", None),
             **kwds,
         )
         if resolve_metadata_dependencies:

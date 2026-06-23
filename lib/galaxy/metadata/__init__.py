@@ -86,6 +86,8 @@ class MetadataCollectionStrategy(metaclass=abc.ABCMeta):
         tool=None,
         job: Optional[galaxy.model.Job] = None,
         link_data_only: bool = False,
+        enable_crypt4gh_transparent_staging: bool = False,
+        crypt4gh_reencryption_service_url: Optional[str] = None,
         kwds=None,
     ):
         """Setup files needed for external metadata collection.
@@ -165,6 +167,8 @@ class PortableDirectoryMetadataGenerator(MetadataCollectionStrategy):
         tool=None,
         job: Optional[galaxy.model.Job] = None,
         link_data_only: bool = False,
+        enable_crypt4gh_transparent_staging: bool = False,
+        crypt4gh_reencryption_service_url: Optional[str] = None,
         kwds=None,
     ):
         assert job_metadata, "setup_external_metadata must be supplied with job_metadata path"
@@ -219,6 +223,8 @@ class PortableDirectoryMetadataGenerator(MetadataCollectionStrategy):
             "max_discovered_files": max_discovered_files,
             "outputs": outputs,
             "change_datatype_actions": job.get_change_datatype_actions(),
+            "enable_crypt4gh_transparent_staging": enable_crypt4gh_transparent_staging,
+            "crypt4gh_reencryption_service_url": crypt4gh_reencryption_service_url,
         }
 
         # export model objects and object store configuration for extended metadata also.
