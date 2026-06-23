@@ -5955,39 +5955,10 @@
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 :Description:
-    URL of the crypt4gh re-encryptor service user-mode endpoint.
-    Galaxy calls POST /recrypt_header on this URL to re-encrypt a
-    dataset's crypt4gh header for the destination compute node's key
-    pair. Example: "https://reencryptor.example.org" Required when
+    URL of compute-side recryptor B. Galaxy sends header-only
+    re-encryption requests to this service during remote tool execution
+    and never transfers encrypted payload bodies. Example:
+    "https://reencryptor.example.org" Required when
     enable_crypt4gh_transparent_staging is true.
-:Default: ``None``
-:Type: str
-
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-``crypt4gh_compute_key_path``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-:Description:
-    Path to the compute node's Crypt4GH private key file (.sec).
-    Galaxy reads this key at job preparation time to decrypt staged
-    crypt4gh inputs using the crypt4gh Python library. Can be
-    overridden per job destination in job_conf.yml via the
-    "crypt4gh_compute_key_path" destination parameter. Required when
-    enable_crypt4gh_transparent_staging is true.
-:Default: ``None``
-:Type: str
-
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-``crypt4gh_compute_key_passphrase_env``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-:Description:
-    Name of the environment variable that holds the passphrase for the
-    compute node's Crypt4GH private key (crypt4gh_compute_key_path).
-    If absent or null the key is assumed to be passphrase-free. Can be
-    overridden per job destination via the
-    "crypt4gh_compute_key_passphrase_env" destination parameter.
 :Default: ``None``
 :Type: str

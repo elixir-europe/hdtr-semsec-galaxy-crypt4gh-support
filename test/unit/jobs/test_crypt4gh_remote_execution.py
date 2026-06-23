@@ -48,11 +48,6 @@ class _RunnerApp:
         self.config = _Config(enable_crypt4gh_transparent_staging)
 
 
-class _RunnerJobWrapper:
-    def __init__(self, *, enable_crypt4gh_transparent_staging):
-        self.app = _RunnerApp(enable_crypt4gh_transparent_staging=enable_crypt4gh_transparent_staging)
-
-
 class _DatasetWrapper:
     def __init__(self, *, dataset_id):
         self.id = dataset_id
@@ -119,12 +114,8 @@ def test_helper_setup_no_failures(crypt4gh_dataset):
     assert result is True
 
 
-def test_prepare_job_freezes_old_staging_path_when_remote_strategy_is_enabled():
-    job_wrapper = _RunnerJobWrapper(enable_crypt4gh_transparent_staging=True)
-
-    command_line = BaseJobRunner._apply_crypt4gh_staging(object(), job_wrapper, "echo hello")
-
-    assert command_line == "echo hello"
+def test_prepare_job_no_longer_exposes_legacy_staging_hook():
+    assert not hasattr(BaseJobRunner, "_apply_crypt4gh_staging")
 
 
 def test_cleanup_wrapper_runs_after_tool_failure_and_preserves_diagnostics(tmp_path):

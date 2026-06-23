@@ -1,6 +1,6 @@
 # Manual UI Testing Guide: Crypt4GH Support
 
-This guide walks through manually testing the Phase 1, Phase 2, and Phase 3 crypt4gh
+This guide walks through manually testing the Phase 1, Phase 2, and Phase 3 Crypt4GH
 changes in a running Galaxy instance.
 
 All commands assume you are in the **Galaxy root directory** with the venv active:
@@ -19,10 +19,11 @@ source .venv/bin/activate
 
 ---
 
-## Step 1 — Start the mock re-encryptor service
+## Step 1 — Start the mock compute-side recryptor B service
 
-The mock service re-encrypts crypt4gh headers on-the-fly using the test key
-pair. It implements the same HTTP API as the real ELIXIR re-encryptor service.
+The mock service re-encrypts Crypt4GH headers on-the-fly using the test key pair.
+It mirrors the compute-side recryptor B API used by remote execution and only handles
+Crypt4GH header material (never encrypted payload bodies).
 
 Open a **dedicated terminal** and leave it running:
 
@@ -49,29 +50,16 @@ Note the URL printed (e.g. `http://127.0.0.1:54321`) — you need it in the next
 
 ## Step 2 — Configure `config/galaxy.yml`
 
-Add (or uncomment) these three keys under the `galaxy:` section.
-`crypt4gh_compute_key_path` points directly to the compute node's private key
-file (`.sec` format produced by `crypt4gh-keygen`):
+Add (or uncomment) these keys under the `galaxy:` section:
 
 ```yaml
 galaxy:
+    metadata_strategy: "extended"
     enable_crypt4gh_transparent_staging: true
     crypt4gh_reencryption_service_url: "http://127.0.0.1:54321" # port from Step 1
-    crypt4gh_compute_key_path: "/absolute/path/to/test-data/crypt4gh/compute_key.sec"
 ```
 
-Replace the path above with the absolute path on your system
-(`realpath test-data/crypt4gh/compute_key.sec`).
-
-If the private key file is passphrase-protected, also set:
-
-```yaml
-crypt4gh_compute_key_passphrase_env: "C4GH_PASSPHRASE"
-```
-
-and export `C4GH_PASSPHRASE` in the environment before starting Galaxy.
-The test key in this repository has no passphrase, so this option can be
-omitted for local testing.
+`metadata_strategy: "extended"` is required for remote tool evaluation mode.
 
 ---
 
@@ -86,19 +74,19 @@ Wait until you see `Starting server in PID ...` and the UI is accessible at
 
 ---
 
-## Step 4 — Upload a crypt4gh-encrypted file (Phase 1)
+## Step 4 — Upload a Crypt4GH-encrypted file (Phase 1)
 
-The file `test-data/crypt4gh/test.fastqsanger.c4gh` is a real crypt4gh file
+The file `test-data/crypt4gh/test.fastqsanger.c4gh` is a real Crypt4GH file
 containing a short FASTQ snippet, encrypted with the test user key.
 
 1. Open `http://localhost:8080` and log in (or use the default admin account).
 2. Click the **Upload** button (top-left of the tool panel).
 3. Click **Choose local file** and select:
-    ```
-    test-data/crypt4gh/test.fastqsanger.c4gh
-    ```
+   ```
+   test-data/crypt4gh/test.fastqsanger.c4gh
+   ```
 4. In the **Type** column leave it as `Auto-detect` — Galaxy should sniff the
-   crypt4gh magic bytes and assign the type automatically.
+   Crypt4GH magic bytes and assign the type automatically.
 5. Click **Start**, then **Close**.
 
 ### What to verify (Phase 1)
@@ -108,7 +96,7 @@ After upload completes, click the dataset name in the history to expand it:
 - **Type** should be `fastqsanger.c4gh` (not `binary` or `data`).
 - Click the **ⓘ (info)** icon → **Dataset Details**. Under **Metadata** you
   should see a `crypt4gh_header` field containing a long base64-encoded string.
-- The peek / content view will show the file is encrypted (no readable text) —
+- The peek/content view will show encrypted content (no readable plaintext) —
   this is expected.
 
 ---
@@ -122,11 +110,9 @@ After upload completes, click the dataset name in the history to expand it:
    the `matches_any` gate).
 3. Select it and click **Run Tool**.
 
-### What to verify (Phase 2 — job script inspection)
+### What to verify (Phase 2 — execution-side `_crypt/` model)
 
 While (or after) the job runs, find the job working directory:
-
-Note: you may need to set the `cleanup_job` setting in `config/galaxy.yml` to `never` to prevent job directories from being deleted immediately after job completion. If you change this setting, remember to restart Galaxy.
 
 ```bash
 ls database/jobs_directory/000/
@@ -135,68 +121,44 @@ JOB_ID=1   # replace with actual job ID shown in the history
 cat database/jobs_directory/000/${JOB_ID}/galaxy_${JOB_ID}.sh
 ```
 
-Look for the Python decrypt block **before** the tool command:
+Verify the input is materialized under `_crypt/inputs` and that no legacy
+`_c4gh_stage` path is created:
 
 ```bash
-"${GALAXY_VIRTUAL_ENV}/bin/python" -c "
-import crypt4gh.lib, crypt4gh.keys, os, sys
-sk = crypt4gh.keys.get_private_key('/path/to/compute_key.sec', lambda: b'')
-with open('/path/_c4gh_stage/ds_N/input.c4gh', 'rb') as inf, \
-     open('/path/_c4gh_stage/ds_N/input', 'wb') as outf:
-    crypt4gh.lib.decrypt([(0, sk, None)], inf, outf)
-" || { echo 'crypt4gh decryption failed'; exit 1; }
+find database/jobs_directory/000/${JOB_ID} -path "*/*_crypt/inputs/*/plaintext" -type f
+# Should print: .../_crypt/inputs/ds_N/plaintext
+
+find database/jobs_directory/000/${JOB_ID} -path "*/*_c4gh_stage/*"
+# Should print nothing
 ```
 
-And the cleanup block **after** the tool command:
+The generated command should reference `_crypt/inputs/ds_<id>/plaintext`
+instead of the encrypted source path.
 
-```bash
-_CRYPT4GH_TOOL_EXIT=$?
-rm -f '/path/_c4gh_stage/ds_N/input'
-exit $_CRYPT4GH_TOOL_EXIT
-```
+### Optional operator check — header-only B interactions
 
-Also verify the staged (re-encrypted) file and the decrypted file:
-
-```bash
-find database/jobs_directory/000/${JOB_ID} -name "*.c4gh"
-# Should print: .../_c4gh_stage/ds_N/input.c4gh
-
-# Manually decrypt the staged file to confirm it is valid:
-python - << 'EOF'
-import sys, io
-import crypt4gh.lib
-from crypt4gh.keys import get_private_key
-
-staged = 'database/jobs_directory/000/1/_c4gh_stage/ds_1/input.c4gh'  # adjust path
-compute_sk = get_private_key('test-data/crypt4gh/compute_key.sec', lambda: b'')
-
-with open(staged, 'rb') as f:
-    out = io.BytesIO()
-    crypt4gh.lib.decrypt([(0, compute_sk, None)], f, out)
-
-print("Decrypted content:", out.getvalue())
-# Should print the original FASTQ plaintext:
-# b'@read1\nACTGACTG\n+\nIIIIIIII\n'
-EOF
-```
+When request logging is enabled on the mock service, you should only see
+header re-encryption endpoints (`/recrypt_header_to_job_key` and
+`/recrypt_header_to_user_key`) and no bulk payload-transfer endpoints.
 
 ---
 
 ## Step 6 — Verify output re-encryption (Phase 3)
 
-After the job in Step 5 completes, inspect the same job script and outputs.
+After the job in Step 5 completes:
 
 1. Confirm the history output dataset type ends with `.c4gh`.
 2. Open dataset details and verify `metadata.crypt4gh_header` is populated.
-3. Inspect the job script for a post-tool encryption block (after `_CRYPT4GH_TOOL_EXIT=$?`) that invokes `crypt4gh.lib.encrypt`.
-4. Confirm plaintext output files are not left behind in the job working path after completion.
+3. Confirm plaintext output files are handled in `_crypt/outputs/`.
+4. Confirm persisted output has Crypt4GH magic bytes.
 
 Example checks:
 
 ```bash
 JOB_ID=1  # replace
 
-# Final persisted output should have crypt4gh magic bytes
+find database/jobs_directory/000/${JOB_ID} -path "*/*_crypt/outputs/*" -type f
+
 OUT_DATASET_PATH=$(readlink -f database/files/*/*/*/*/* 2>/dev/null | head -n 1)
 python - "$OUT_DATASET_PATH" << 'EOF'
 import sys
@@ -228,7 +190,9 @@ print('Decrypted output bytes:', out.getvalue()[:200])
 EOF
 ```
 
-## Step 7 — Verify the staging gate (Phase 1 / Phase 2 / Phase 3 interaction)
+---
+
+## Step 7 — Verify the staging gate behavior
 
 To confirm the gate works, temporarily disable staging and check that the
 dataset disappears from tool inputs:
@@ -238,18 +202,18 @@ dataset disappears from tool inputs:
 3. Open the same FastQC tool — the `fastqsanger.c4gh` dataset should **not**
    appear in the input drop-down.
 4. Run a tool and verify outputs are no longer re-encrypted to `.c4gh`.
-5. Re-enable the flag and restart to restore normal behaviour.
+5. Re-enable the flag and restart to restore normal behavior.
 
 ---
 
 ## Key files reference
 
-| File                                       | Purpose                                                       |
-|--------------------------------------------| ------------------------------------------------------------- |
-| `test-data/crypt4gh/user_key.sec`          | User's private key (decrypts the test file)                   |
-| `test-data/crypt4gh/user_key.pub`          | User's public key                                             |
-| `test-data/crypt4gh/compute_key.sec`       | Compute node private key (set as `crypt4gh_compute_key_path`) |
-| `test-data/crypt4gh/compute_key.pub`       | Compute node public key (re-encryptor target)                 |
-| `test-data/crypt4gh/test.fastqsanger.c4gh` | Test FASTQ file encrypted with `user_key.pub`                 |
-| `test/unit/jobs/mock_recryptor_service.py` | Mock re-encryptor service (FastAPI + uvicorn)                 |
-| `lib/galaxy/jobs/crypt4gh_staging.py`      | Staging utility called from `prepare_job`                     |
+| File                                       | Purpose                                                         |
+|--------------------------------------------|-----------------------------------------------------------------|
+| `test-data/crypt4gh/user_key.sec`          | User private key (decrypts test file)                           |
+| `test-data/crypt4gh/user_key.pub`          | User public key                                                 |
+| `test-data/crypt4gh/compute_key.sec`       | Compute test private key used by mock compute-side service      |
+| `test-data/crypt4gh/compute_key.pub`       | Compute test public key used by mock compute-side service       |
+| `test-data/crypt4gh/test.fastqsanger.c4gh` | Test FASTQ encrypted with `user_key.pub`                        |
+| `test/unit/jobs/mock_recryptor_service.py` | Mock compute-side recryptor service (FastAPI + uvicorn)         |
+| `lib/galaxy/tools/crypt4gh_remote_execution.py` | Execution-side `_crypt/` staging/finalization logic       |
