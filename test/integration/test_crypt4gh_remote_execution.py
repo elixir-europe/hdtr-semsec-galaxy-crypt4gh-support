@@ -249,6 +249,9 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         crypt_plaintext_path = Path(job_working_directory) / "_crypt" / "inputs" / f"ds_{input_dataset_table_id}" / "plaintext"
         assert crypt_plaintext_path.exists(), f"Expected plaintext path {crypt_plaintext_path} to exist"
 
+        staged_ciphertext_path = Path(job_working_directory) / "_crypt" / "inputs" / f"ds_{input_dataset_table_id}" / "input.c4gh"
+        assert not staged_ciphertext_path.exists(), f"Did not expect staged file {staged_ciphertext_path} to exist"
+
         plaintext_files = [
             plaintext_file
             for plaintext_file in Path(job_working_directory).rglob("plaintext")

@@ -10,6 +10,7 @@ from datetime import (
 from pathlib import Path
 from typing import (
     Any,
+    BinaryIO,
     Mapping,
     Optional,
     Protocol,
@@ -40,6 +41,43 @@ class _Crypt4GHAppConfig(Protocol):
 
 class Crypt4GHRemoteExecutionError(Exception):
     """Raised when execution-side Crypt4GH setup must fail closed."""
+
+
+class _HeaderThenBodyStream:
+    def __init__(self, *, header_bytes: bytes, body_stream: BinaryIO) -> None:
+        self._header = memoryview(header_bytes)
+        self._header_pos = 0
+        self._body_stream = body_stream
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            header_remainder = self._header[self._header_pos :].tobytes()
+            self._header_pos = len(self._header)
+            body_remainder = self._body_stream.read()
+            return header_remainder + body_remainder
+
+        if size == 0:
+            return b""
+
+        chunks: list[bytes] = []
+        header_remaining = len(self._header) - self._header_pos
+        if header_remaining > 0:
+            take = min(size, header_remaining)
+            chunks.append(self._header[self._header_pos : self._header_pos + take].tobytes())
+            self._header_pos += take
+
+        body_remaining = size - sum(len(chunk) for chunk in chunks)
+        if body_remaining > 0:
+            chunks.append(self._body_stream.read(body_remaining))
+
+        return b"".join(chunks)
+
+    def readinto(self, buffer: bytearray) -> int:
+        data = self.read(len(buffer))
+        bytes_read = len(data)
+        if bytes_read:
+            buffer[:bytes_read] = data
+        return bytes_read
 
 
 class Crypt4GHRemoteComputeEnvironment(SharedComputeEnvironment):
@@ -199,18 +237,13 @@ def _prepare_plaintext_input_for_dataset(
 
     dataset_workspace = crypt_inputs_workspace / f"ds_{dataset_id}"
     dataset_workspace.mkdir(parents=True, exist_ok=True)
-    staged_path = dataset_workspace / "input.c4gh"
     plaintext_path = dataset_workspace / "plaintext"
 
     source_dataset_path = Path(dataset.get_file_name())
-    _write_recrypted_header_file(
+    _decrypt_recrypted_input(
         source_dataset_path=source_dataset_path,
         source_header=cast(str, header),
         recrypted_header=recrypted_header,
-        staged_path=staged_path,
-    )
-    _decrypt_staged_input(
-        staged_path=staged_path,
         plaintext_path=plaintext_path,
         job_private_key=job_private_key,
     )
@@ -250,29 +283,28 @@ def _recrypt_header_to_job_key(
         ) from exc
 
 
-def _write_recrypted_header_file(
+def _decrypt_recrypted_input(
     *,
     source_dataset_path: Path,
     source_header: str,
     recrypted_header: str,
-    staged_path: Path,
+    plaintext_path: Path,
+    job_private_key: bytes,
 ) -> None:
     source_header_bytes = _decode_header(source_header)
     recrypted_header_bytes = _decode_header(recrypted_header)
     source_header_length = _header_length(source_header_bytes)
     try:
-        with source_dataset_path.open("rb") as source_stream, staged_path.open("wb") as staged_stream:
-            staged_stream.write(recrypted_header_bytes)
+        with source_dataset_path.open("rb") as source_stream, plaintext_path.open("wb") as plaintext_stream:
             source_stream.seek(source_header_length)
-            while True:
-                chunk = source_stream.read(65536)
-                if not chunk:
-                    break
-                staged_stream.write(chunk)
+            staged_stream = _HeaderThenBodyStream(header_bytes=recrypted_header_bytes, body_stream=source_stream)
+            crypt4gh.lib.decrypt([(0, job_private_key, None)], staged_stream, plaintext_stream)
     except OSError as exc:
         raise Crypt4GHRemoteExecutionError(
-            f"Failed to stage Crypt4GH input for source dataset {source_dataset_path}: {exc}"
+            f"Failed to read or materialize Crypt4GH input for source dataset {source_dataset_path}: {exc}"
         ) from exc
+    except Exception as exc:
+        raise Crypt4GHRemoteExecutionError(f"Failed to decrypt staged Crypt4GH input {source_dataset_path}") from exc
 
 
 def _decode_header(encoded_header: str) -> bytes:
@@ -289,19 +321,6 @@ def _header_length(header_bytes: bytes) -> int:
         return stream.tell()
     except Exception as exc:
         raise Crypt4GHRemoteExecutionError("Invalid Crypt4GH header payload") from exc
-
-
-def _decrypt_staged_input(
-    *,
-    staged_path: Path,
-    plaintext_path: Path,
-    job_private_key: bytes,
-) -> None:
-    try:
-        with staged_path.open("rb") as staged_stream, plaintext_path.open("wb") as plaintext_stream:
-            crypt4gh.lib.decrypt([(0, job_private_key, None)], staged_stream, plaintext_stream)
-    except Exception as exc:
-        raise Crypt4GHRemoteExecutionError(f"Failed to decrypt staged Crypt4GH input {staged_path}") from exc
 
 
 def _assert_minimum_ttl(*, datasets: Sequence[DatasetInstance], minimum_ttl: timedelta, now: datetime) -> None:
