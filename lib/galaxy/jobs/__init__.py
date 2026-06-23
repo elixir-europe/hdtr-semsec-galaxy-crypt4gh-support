@@ -2037,7 +2037,28 @@ class MinimalJobWrapper(HasResourceParameters):
         if not os.path.isdir(marker_dir):
             return
 
+        discovered_designation_markers: dict[str, str] = {}
+        discovered_marker_path = os.path.join(marker_dir, "discovered_designations.json")
+        if os.path.exists(discovered_marker_path):
+            try:
+                with open(discovered_marker_path) as marker_map_fh:
+                    loaded_markers = json.load(marker_map_fh)
+                if isinstance(loaded_markers, dict):
+                    discovered_designation_markers = {str(key): str(value) for key, value in loaded_markers.items()}
+            except Exception as e:
+                log.exception("(%s) Failed to read discovered marker map %s: %s", job.id, discovered_marker_path, e)
+
         for dataset_assoc in output_dataset_associations:
+            designation_encrypted_ext = None
+            assoc_name = getattr(dataset_assoc, "name", "")
+            if isinstance(assoc_name, str) and assoc_name.startswith("__new_primary_file_"):
+                split_name = assoc_name[len("__new_primary_file_") :].split("|", 1)
+                if len(split_name) == 2:
+                    designation = split_name[1]
+                    if designation.endswith("__"):
+                        designation = designation[:-2]
+                    designation_encrypted_ext = discovered_designation_markers.get(designation)
+
             dataset_instances = (
                 dataset_assoc.dataset.dataset.history_associations + dataset_assoc.dataset.dataset.library_associations
             )
@@ -2045,18 +2066,19 @@ class MinimalJobWrapper(HasResourceParameters):
                 if dataset.dataset is None:
                     continue
                 marker_path = os.path.join(marker_dir, f"ds_{dataset.dataset.id}.encrypted")
-                if not os.path.exists(marker_path):
-                    continue
-
                 encrypted_ext = None
-                try:
-                    with open(marker_path) as marker_fh:
-                        marker_ext = marker_fh.read().strip()
-                        if marker_ext:
-                            encrypted_ext = marker_ext
-                except Exception as e:
-                    log.exception("(%s) Failed to read marker file %s: %s", job.id, marker_path, e)
-                    continue
+                if os.path.exists(marker_path):
+                    try:
+                        with open(marker_path) as marker_fh:
+                            marker_ext = marker_fh.read().strip()
+                            if marker_ext:
+                                encrypted_ext = marker_ext
+                    except Exception as e:
+                        log.exception("(%s) Failed to read marker file %s: %s", job.id, marker_path, e)
+                        continue
+
+                if not encrypted_ext and designation_encrypted_ext:
+                    encrypted_ext = designation_encrypted_ext
 
                 if not encrypted_ext:
                     continue

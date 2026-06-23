@@ -173,6 +173,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
             if output_targets:
                 compute_public_key = getattr(compute_environment, "compute_public_key", None)
                 compute_keypair_id = getattr(compute_environment, "compute_keypair_id", None)
+                compute_keypair_expiration_date = getattr(compute_environment, "compute_keypair_expiration_date", None)
                 if not compute_public_key or not compute_keypair_id:
                     raise Exception(
                         "Crypt4GH output finalization requires compute public key and compute keypair id"
@@ -184,7 +185,8 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                     f"_f(output_targets=json.loads({json.dumps(json.dumps(output_targets))}), "
                     f"reencryption_service_url={json.dumps(reencryption_service_url)}, "
                     f"compute_public_key={json.dumps(compute_public_key)}, "
-                    f"compute_keypair_id={json.dumps(compute_keypair_id)})"
+                    f"compute_keypair_id={json.dumps(compute_keypair_id)}, "
+                    f"compute_keypair_expiration_date={json.dumps(compute_keypair_expiration_date)})"
                 )
                 cleanup_command = (
                     f"PYTHONPATH={shlex.quote(galaxy_lib_for_finalize)}:$PYTHONPATH "
@@ -210,9 +212,17 @@ if __name__ == "__main__":
     try:
         main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY)
     except Exception:
+        traceback_text = traceback.format_exc()
         os.makedirs(EXPORT_STORE_DIRECTORY, exist_ok=True)
         with open(os.path.join(EXPORT_STORE_DIRECTORY, "traceback.txt"), "w") as out:
-            out.write(traceback.format_exc())
+            out.write(traceback_text)
+
+        outputs_directory = os.path.join(WORKING_DIRECTORY, "outputs")
+        os.makedirs(outputs_directory, exist_ok=True)
+        with open(os.path.join(outputs_directory, "tool_stdout"), "a"):
+            pass
+        with open(os.path.join(outputs_directory, "tool_stderr"), "a") as stderr:
+            stderr.write(traceback_text)
         raise
     finally:
         shutil.rmtree(TMPDIR, ignore_errors=True)

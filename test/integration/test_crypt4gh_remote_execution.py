@@ -6,6 +6,11 @@ import os
 import socket
 import threading
 import time
+from datetime import (
+    datetime,
+    timedelta,
+    timezone,
+)
 from pathlib import Path
 from typing import (
     Any,
@@ -97,6 +102,7 @@ def _build_compute_recryptor_app(
     compute_public_key_text = Path(compute_public_key_path).read_text()
 
     app = FastAPI(title="mock-compute-crypt4gh-recryptor", version="test")
+    app.state.compute_keypair_expiration_date = compute_keypair_expiration_date
 
     @app.get("/info")
     def info() -> dict[str, str]:
@@ -136,7 +142,7 @@ def _build_compute_recryptor_app(
             crypt4gh_header=base64.b64encode(recrypted_header_bytes).decode("ascii"),
             crypt4gh_compute_public_key=compute_public_key_text,
             crypt4gh_compute_keypair_id=compute_keypair_id,
-            crypt4gh_compute_keypair_expiration_date=compute_keypair_expiration_date,
+            crypt4gh_compute_keypair_expiration_date=app.state.compute_keypair_expiration_date,
         )
 
     @app.post("/recrypt_header_to_user_key", response_model=_RecryptToUserKeyResponse)
@@ -174,7 +180,7 @@ def _build_compute_recryptor_app(
         return _RecryptToUserKeyResponse(
             crypt4gh_header=base64.b64encode(recrypted_header_bytes).decode("ascii"),
             crypt4gh_compute_keypair_id=compute_keypair_id,
-            crypt4gh_compute_keypair_expiration_date=compute_keypair_expiration_date,
+            crypt4gh_compute_keypair_expiration_date=app.state.compute_keypair_expiration_date,
         )
 
     return app
@@ -204,6 +210,14 @@ class _MockComputeRecryptorServer:
             compute_keypair_expiration_date=compute_keypair_expiration_date,
             should_fail_recrypt_to_user_key=lambda: self.fail_recrypt_to_user_key,
         )
+
+    @property
+    def compute_keypair_expiration_date(self) -> str:
+        return str(self._app.state.compute_keypair_expiration_date)
+
+    @compute_keypair_expiration_date.setter
+    def compute_keypair_expiration_date(self, expiration: str) -> None:
+        self._app.state.compute_keypair_expiration_date = expiration
 
     @property
     def url(self) -> str:
@@ -443,6 +457,140 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         tool_stderr = job.get("tool_stderr", "")
         assert CRYPT4GH_CLEANUP_FAILED_MARKER in tool_stderr
         assert "Compute-side recryptor B returned HTTP 500" in tool_stderr
+
+    def test_discovered_dataset_outputs_are_encrypted_for_crypt4gh_jobs(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
+        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "multi_output_assign_primary",
+            {"num_param": 7, "input": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+
+        history_contents = self.dataset_populator.get_history_contents(history_id)
+        sample_entry = next(
+            item for item in history_contents if item["history_content_type"] == "dataset" and item["hid"] == 2
+        )
+        sample2_entry = next(
+            item for item in history_contents if item["history_content_type"] == "dataset" and item["hid"] == 3
+        )
+        sample3_entry = next(
+            item for item in history_contents if item["history_content_type"] == "dataset" and item["hid"] == 4
+        )
+
+        sample_details = self.dataset_populator.get_history_dataset_details(history_id, dataset_id=sample_entry["id"])
+        sample2_details = self.dataset_populator.get_history_dataset_details(history_id, dataset_id=sample2_entry["id"])
+        sample3_details = self.dataset_populator.get_history_dataset_details(history_id, dataset_id=sample3_entry["id"])
+        assert sample_details["extension"].endswith(".c4gh"), sample_details
+        assert sample2_details["extension"].endswith(".c4gh"), sample2_details
+        assert sample3_details["extension"].endswith(".c4gh"), sample3_details
+
+        sample_hda = sa_session.get(model.HistoryDatasetAssociation, self._app.security.decode_id(sample_entry["id"]))
+        sample2_hda = sa_session.get(model.HistoryDatasetAssociation, self._app.security.decode_id(sample2_entry["id"]))
+        sample3_hda = sa_session.get(model.HistoryDatasetAssociation, self._app.security.decode_id(sample3_entry["id"]))
+        assert sample_hda is not None and sample_hda.dataset is not None
+        assert sample2_hda is not None and sample2_hda.dataset is not None
+        assert sample3_hda is not None and sample3_hda.dataset is not None
+
+        for hda in (sample_hda, sample2_hda, sample3_hda):
+            dataset_path = Path(hda.dataset.get_file_name())
+            with dataset_path.open("rb") as dataset_stream:
+                assert dataset_stream.read(8) == b"crypt4gh"
+
+    def test_remote_helper_fails_before_launch_when_stored_ttl_below_threshold(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
+        too_soon = datetime.now(timezone.utc) + timedelta(minutes=10)
+        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = too_soon.isoformat()
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "inheritance_simple",
+            {"input1": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=False)
+        job = self.dataset_populator.get_job_details(job_api_id, full=True).json()
+
+        assert job["state"] == "error", job
+        assert "minimum TTL requirement before remote call" in job.get("tool_stderr", "")
+
+    def test_output_finalization_fails_closed_when_compute_key_expires_mid_run(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
+        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        sa_session.commit()
+
+        previous_expiration = self._mock_compute_recryptor_server.compute_keypair_expiration_date
+        self._mock_compute_recryptor_server.compute_keypair_expiration_date = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        try:
+            run_response = self.dataset_populator.run_tool(
+                "output_format",
+                {
+                    "input_data_1": {"src": "hda", "id": input_dataset_id},
+                    "input_data_2": {"src": "hda", "id": input_dataset_id},
+                    "input_text": "not_foo_or_bar",
+                },
+                history_id,
+            )
+            job_api_id = run_response["jobs"][0]["id"]
+            self.dataset_populator.wait_for_job(job_api_id, assert_ok=False)
+            job = self.dataset_populator.get_job_details(job_api_id, full=True).json()
+        finally:
+            self._mock_compute_recryptor_server.compute_keypair_expiration_date = previous_expiration
+
+        assert job["state"] == "error"
+        assert "compute key expired before output finalization" in job.get("tool_stderr", "")
 
     def _collect_job_script_texts(self, job_working_directory: Path) -> list[str]:
         script_texts: list[str] = []
