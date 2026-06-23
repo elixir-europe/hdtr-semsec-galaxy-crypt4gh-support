@@ -2060,7 +2060,14 @@ class MinimalJobWrapper(HasResourceParameters):
 
                 if not encrypted_ext:
                     continue
-                if self.app.datatypes_registry.get_datatype_by_extension(encrypted_ext) is None:
+
+                encrypted_datatype = self.app.datatypes_registry.get_datatype_by_extension(encrypted_ext)
+                if encrypted_datatype is None and encrypted_ext.endswith(".c4gh"):
+                    base_ext = encrypted_ext[: -len(".c4gh")]
+                    if base_ext:
+                        encrypted_datatype = self.app.datatypes_registry.get_or_create_crypt4gh_datatype(base_ext)
+
+                if encrypted_datatype is None:
                     continue
 
                 if dataset.extension != encrypted_ext:

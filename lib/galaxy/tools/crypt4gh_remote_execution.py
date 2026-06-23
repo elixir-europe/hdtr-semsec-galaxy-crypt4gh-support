@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import base64
 import io
+import os
+import shutil
+from dataclasses import dataclass
 from datetime import (
     datetime,
     timedelta,
@@ -80,6 +83,21 @@ class _HeaderThenBodyStream:
         return bytes_read
 
 
+@dataclass(frozen=True)
+class _RecryptToJobKeyResult:
+    crypt4gh_header: str
+    crypt4gh_compute_public_key: str
+    crypt4gh_compute_keypair_id: str
+
+
+@dataclass(frozen=True)
+class _DeclaredCrypt4GHOutputTarget:
+    output_path: str
+    plaintext_path: str
+    encrypted_marker_path: str
+    encrypted_ext: str
+
+
 class Crypt4GHRemoteComputeEnvironment(SharedComputeEnvironment):
     def __init__(
         self,
@@ -87,9 +105,13 @@ class Crypt4GHRemoteComputeEnvironment(SharedComputeEnvironment):
         job_io: JobIO,
         job: Job,
         input_path_overrides_by_dataset_id: Mapping[int, str],
+        compute_public_key: Optional[str],
+        compute_keypair_id: Optional[str],
     ) -> None:
         super().__init__(job_io=job_io, job=job)
         self._input_path_overrides_by_dataset_id = dict(input_path_overrides_by_dataset_id)
+        self.compute_public_key = compute_public_key
+        self.compute_keypair_id = compute_keypair_id
 
     def input_path_rewrite(self, dataset: DatasetInstance) -> str:
         dataset_object = getattr(dataset, "dataset", None)
@@ -118,8 +140,10 @@ def build_crypt4gh_remote_compute_environment(
     job_private_key, job_public_key = _generate_job_keypair()
 
     input_path_overrides_by_dataset_id: dict[int, str] = {}
+    compute_public_key: Optional[str] = None
+    compute_keypair_id: Optional[str] = None
     for dataset in crypt4gh_inputs:
-        dataset_id, plaintext_path = _prepare_plaintext_input_for_dataset(
+        dataset_id, plaintext_path, recrypt_result = _prepare_plaintext_input_for_dataset(
             dataset=dataset,
             crypt_inputs_workspace=crypt_inputs_workspace,
             reencryption_service_url=reencryption_service_url,
@@ -128,10 +152,26 @@ def build_crypt4gh_remote_compute_environment(
         )
         input_path_overrides_by_dataset_id[dataset_id] = plaintext_path
 
+        if compute_public_key is None:
+            compute_public_key = recrypt_result.crypt4gh_compute_public_key
+        elif compute_public_key != recrypt_result.crypt4gh_compute_public_key:
+            raise Crypt4GHRemoteExecutionError(
+                "Crypt4GH job inputs reference multiple compute public keys; mixed key contexts are unsupported"
+            )
+
+        if compute_keypair_id is None:
+            compute_keypair_id = recrypt_result.crypt4gh_compute_keypair_id
+        elif compute_keypair_id != recrypt_result.crypt4gh_compute_keypair_id:
+            raise Crypt4GHRemoteExecutionError(
+                "Crypt4GH job inputs reference multiple compute keypair ids; mixed key contexts are unsupported"
+            )
+
     return Crypt4GHRemoteComputeEnvironment(
         job_io=job_io,
         job=job,
         input_path_overrides_by_dataset_id=input_path_overrides_by_dataset_id,
+        compute_public_key=compute_public_key,
+        compute_keypair_id=compute_keypair_id,
     )
 
 
@@ -214,7 +254,7 @@ def _prepare_plaintext_input_for_dataset(
     reencryption_service_url: str,
     job_public_key: str,
     job_private_key: bytes,
-) -> tuple[int, str]:
+) -> tuple[int, str, _RecryptToJobKeyResult]:
     dataset_object = getattr(dataset, "dataset", None)
     dataset_id = getattr(dataset_object, "id", None)
     if not isinstance(dataset_id, int):
@@ -228,7 +268,7 @@ def _prepare_plaintext_input_for_dataset(
             "Crypt4GH input metadata must include crypt4gh_header and crypt4gh_compute_keypair_id"
         )
 
-    recrypted_header = _recrypt_header_to_job_key(
+    recrypt_result = _recrypt_header_to_job_key(
         reencryption_service_url=reencryption_service_url,
         crypt4gh_header=cast(str, header),
         compute_keypair_id=cast(str, keypair_id),
@@ -243,11 +283,11 @@ def _prepare_plaintext_input_for_dataset(
     _decrypt_recrypted_input(
         source_dataset_path=source_dataset_path,
         source_header=cast(str, header),
-        recrypted_header=recrypted_header,
+        recrypted_header=recrypt_result.crypt4gh_header,
         plaintext_path=plaintext_path,
         job_private_key=job_private_key,
     )
-    return dataset_id, str(plaintext_path)
+    return dataset_id, str(plaintext_path), recrypt_result
 
 
 def _recrypt_header_to_job_key(
@@ -256,7 +296,7 @@ def _recrypt_header_to_job_key(
     crypt4gh_header: str,
     compute_keypair_id: str,
     job_public_key: str,
-) -> str:
+) -> _RecryptToJobKeyResult:
     endpoint = f"{reencryption_service_url.rstrip('/')}/recrypt_header_to_job_key"
     payload = {
         "crypt4gh_header": crypt4gh_header,
@@ -276,11 +316,217 @@ def _recrypt_header_to_job_key(
         )
 
     try:
-        return cast(str, response.json()["crypt4gh_header"])
+        response_json = response.json()
+        return _RecryptToJobKeyResult(
+            crypt4gh_header=cast(str, response_json["crypt4gh_header"]),
+            crypt4gh_compute_public_key=cast(str, response_json["crypt4gh_compute_public_key"]),
+            crypt4gh_compute_keypair_id=cast(str, response_json["crypt4gh_compute_keypair_id"]),
+        )
     except (ValueError, KeyError, TypeError) as exc:
         raise Crypt4GHRemoteExecutionError(
             "Compute-side recryptor B returned an invalid /recrypt_header_to_job_key payload"
         ) from exc
+
+
+def collect_declared_crypt4gh_output_targets(
+    *,
+    job_io: JobIO,
+    tool_outputs: Mapping[str, Any],
+    datatypes_registry: Any,
+    working_directory: str,
+) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    marker_dir = Path(working_directory) / "_c4gh_stage" / "outputs"
+    plaintext_root = Path(working_directory) / "_crypt" / "outputs"
+    tool_working_directory = Path(working_directory) / "working"
+
+    for output_name, (dataset, dataset_path) in job_io.get_output_hdas_and_fnames().items():
+        if output_name not in tool_outputs:
+            continue
+
+        dataset_object = getattr(dataset, "dataset", None)
+        dataset_id = getattr(dataset_object, "id", None)
+        if not isinstance(dataset_id, int):
+            continue
+
+        base_ext = cast(str, getattr(dataset, "ext", "") or "")
+        if not base_ext:
+            continue
+        if base_ext.endswith(".c4gh"):
+            continue
+
+        if base_ext in ("auto", "data", "_sniff_"):
+            tool_output = tool_outputs.get(output_name)
+            declared_ext = getattr(tool_output, "format", None) if tool_output else None
+            if declared_ext and declared_ext not in ("auto", "data", "_sniff_", "input"):
+                base_ext = declared_ext
+            else:
+                continue
+
+        encrypted_ext = f"{base_ext}.c4gh"
+        if datatypes_registry.get_datatype_by_extension(encrypted_ext) is None:
+            datatypes_registry.get_or_create_crypt4gh_datatype(base_ext)
+
+        tool_output = tool_outputs.get(output_name)
+        from_work_dir = getattr(tool_output, "from_work_dir", None) if tool_output else None
+        if from_work_dir:
+            from_work_dir_path = Path(str(from_work_dir))
+            output_path = str(
+                from_work_dir_path if from_work_dir_path.is_absolute() else tool_working_directory / from_work_dir_path
+            )
+        else:
+            output_path = (
+                getattr(dataset_path, "false_path", None)
+                or getattr(dataset_path, "real_path", None)
+                or str(dataset_path)
+            )
+
+        target = _DeclaredCrypt4GHOutputTarget(
+            output_path=str(output_path),
+            plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
+            encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
+            encrypted_ext=encrypted_ext,
+        )
+        targets.append(
+            {
+                "output_path": target.output_path,
+                "plaintext_path": target.plaintext_path,
+                "encrypted_marker_path": target.encrypted_marker_path,
+                "encrypted_ext": target.encrypted_ext,
+            }
+        )
+
+    return targets
+
+
+def finalize_declared_crypt4gh_outputs(
+    *,
+    output_targets: Sequence[Mapping[str, str]],
+    reencryption_service_url: str,
+    compute_public_key: str,
+    compute_keypair_id: str,
+) -> None:
+    for target in output_targets:
+        output_path = Path(target["output_path"])
+        if not output_path.exists():
+            continue
+
+        plaintext_path = Path(target["plaintext_path"])
+        plaintext_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(output_path, plaintext_path)
+
+        compute_encrypted_path = Path(f"{output_path}.compute.c4gh")
+        final_tmp_path = Path(f"{output_path}.c4gh.tmp")
+        try:
+            _encrypt_plaintext_to_compute_key(
+                plaintext_path=plaintext_path,
+                compute_encrypted_path=compute_encrypted_path,
+                compute_public_key=compute_public_key,
+            )
+            _rewrite_output_header_to_user_key(
+                compute_encrypted_path=compute_encrypted_path,
+                final_output_tmp_path=final_tmp_path,
+                reencryption_service_url=reencryption_service_url,
+                compute_keypair_id=compute_keypair_id,
+            )
+            os.replace(final_tmp_path, output_path)
+
+            marker_path = Path(target["encrypted_marker_path"])
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text(f"{target['encrypted_ext']}\n")
+        except Exception as exc:
+            raise Crypt4GHRemoteExecutionError(
+                f"Failed to finalize encrypted Crypt4GH output at {output_path}: {exc}"
+            ) from exc
+        finally:
+            if compute_encrypted_path.exists():
+                compute_encrypted_path.unlink()
+            if final_tmp_path.exists():
+                final_tmp_path.unlink()
+
+
+def _encrypt_plaintext_to_compute_key(
+    *,
+    plaintext_path: Path,
+    compute_encrypted_path: Path,
+    compute_public_key: str,
+) -> None:
+    recipient_key = _parse_crypt4gh_public_key(compute_public_key)
+    ephemeral_private_key = X25519PrivateKey.generate().private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    with plaintext_path.open("rb") as plaintext_stream, compute_encrypted_path.open("wb") as encrypted_stream:
+        crypt4gh.lib.encrypt([(0, ephemeral_private_key, recipient_key)], plaintext_stream, encrypted_stream)
+
+
+def _rewrite_output_header_to_user_key(
+    *,
+    compute_encrypted_path: Path,
+    final_output_tmp_path: Path,
+    reencryption_service_url: str,
+    compute_keypair_id: str,
+) -> None:
+    with compute_encrypted_path.open("rb") as encrypted_stream:
+        list(crypt4gh.header.parse(encrypted_stream))
+        header_length = encrypted_stream.tell()
+        encrypted_stream.seek(0)
+        encrypted_header = encrypted_stream.read(header_length)
+
+    recrypted_header = _recrypt_header_to_user_key(
+        reencryption_service_url=reencryption_service_url,
+        crypt4gh_header=base64.b64encode(encrypted_header).decode("ascii"),
+        compute_keypair_id=compute_keypair_id,
+    )
+    recrypted_header_bytes = _decode_header(recrypted_header)
+    _header_length(recrypted_header_bytes)
+
+    with compute_encrypted_path.open("rb") as encrypted_stream, final_output_tmp_path.open("wb") as final_stream:
+        encrypted_stream.seek(header_length)
+        final_stream.write(recrypted_header_bytes)
+        shutil.copyfileobj(encrypted_stream, final_stream)
+
+
+def _recrypt_header_to_user_key(
+    *,
+    reencryption_service_url: str,
+    crypt4gh_header: str,
+    compute_keypair_id: str,
+) -> str:
+    endpoint = f"{reencryption_service_url.rstrip('/')}/recrypt_header_to_user_key"
+    payload = {
+        "crypt4gh_header": crypt4gh_header,
+        "crypt4gh_compute_keypair_id": compute_keypair_id,
+    }
+    try:
+        response = requests.post(endpoint, json=payload, timeout=30)
+    except requests.RequestException as exc:
+        raise Crypt4GHRemoteExecutionError(
+            f"Failed to contact compute-side recryptor B at {endpoint}: {exc}"
+        ) from exc
+
+    if not response.ok:
+        raise Crypt4GHRemoteExecutionError(
+            f"Compute-side recryptor B returned HTTP {response.status_code} for {endpoint}: {response.text}"
+        )
+
+    try:
+        return cast(str, response.json()["crypt4gh_header"])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise Crypt4GHRemoteExecutionError(
+            "Compute-side recryptor B returned an invalid /recrypt_header_to_user_key payload"
+        ) from exc
+
+
+def _parse_crypt4gh_public_key(public_key_pem: str) -> bytes:
+    lines = [line.strip() for line in public_key_pem.splitlines() if line.strip()]
+    if len(lines) < 3:
+        raise Crypt4GHRemoteExecutionError("Invalid CRYPT4GH public key payload")
+    try:
+        return base64.b64decode("".join(lines[1:-1]))
+    except ValueError as exc:
+        raise Crypt4GHRemoteExecutionError("Invalid CRYPT4GH public key payload") from exc
 
 
 def _decrypt_recrypted_input(

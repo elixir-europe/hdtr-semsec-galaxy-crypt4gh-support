@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import shutil
 import tempfile
 import traceback
@@ -29,6 +30,8 @@ from galaxy.tools import (
 )
 from galaxy.tools.crypt4gh_remote_execution import (
     build_crypt4gh_remote_compute_environment,
+    collect_declared_crypt4gh_output_targets,
+    finalize_declared_crypt4gh_outputs,
     should_run_crypt4gh_remote_execution,
 )
 from galaxy.tools.data import (
@@ -83,6 +86,7 @@ class ToolApp(MinimalToolApp):
 
 
 def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
+    galaxy_lib_for_finalize = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
     metadata_params = get_metadata_params(WORKING_DIRECTORY)
     datatypes_config = metadata_params["datatypes_config"]
     if not os.path.exists(datatypes_config):
@@ -141,6 +145,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     tool_evaluator = evaluation.RemoteToolEvaluator(
         app=app, tool=tool, job=job_io.job, local_working_directory=WORKING_DIRECTORY
     )
+    reencryption_service_url: str = ""
     if is_crypt4gh_job:
         reencryption_service_url = metadata_params.get("crypt4gh_reencryption_service_url")
         if not reencryption_service_url:
@@ -156,6 +161,34 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     tool_evaluator.set_compute_environment(compute_environment=compute_environment)
     with open(os.path.join(WORKING_DIRECTORY, "tool_script.sh"), "a") as out:
         command_line, version_command_line, extra_filenames, environment_variables, *_ = tool_evaluator.build()
+        if is_crypt4gh_job:
+            output_targets = collect_declared_crypt4gh_output_targets(
+                job_io=job_io,
+                tool_outputs=tool.outputs,
+                datatypes_registry=app.datatypes_registry,
+                working_directory=WORKING_DIRECTORY,
+            )
+            if output_targets:
+                compute_public_key = getattr(compute_environment, "compute_public_key", None)
+                compute_keypair_id = getattr(compute_environment, "compute_keypair_id", None)
+                if not compute_public_key or not compute_keypair_id:
+                    raise Exception(
+                        "Crypt4GH output finalization requires compute public key and compute keypair id"
+                    )
+
+                finalize_script = (
+                    "from galaxy.tools.crypt4gh_remote_execution import finalize_declared_crypt4gh_outputs as _f; "
+                    "import json; "
+                    f"_f(output_targets=json.loads({json.dumps(json.dumps(output_targets))}), "
+                    f"reencryption_service_url={json.dumps(reencryption_service_url)}, "
+                    f"compute_public_key={json.dumps(compute_public_key)}, "
+                    f"compute_keypair_id={json.dumps(compute_keypair_id)})"
+                )
+                command_line = (
+                    f"{command_line}\n"
+                    f"PYTHONPATH={shlex.quote(galaxy_lib_for_finalize)}:$PYTHONPATH "
+                    f"python -c {shlex.quote(finalize_script)}"
+                )
         out.write(f'{version_command_line or ""}{command_line}')
 
 

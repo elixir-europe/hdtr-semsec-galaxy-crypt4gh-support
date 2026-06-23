@@ -491,7 +491,9 @@ class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
     def set_meta(self, dataset: DatasetProtocol, overwrite: bool = True,
                  crypt4gh_header: Optional[bytes] = None,
                  crypt4gh_compute_keypair_id: Optional[str] = None,
-                 crypt4gh_compute_keypair_expiration_date: Optional[datetime] = None, **kwd) -> None:
+                 crypt4gh_compute_keypair_expiration_date: Optional[datetime] = None,
+                 crypt4gh_clear_compute_keypair: bool = False,
+                 **kwd) -> None:
         super().set_meta(dataset=dataset, overwrite=overwrite, **kwd)
 
         try:
@@ -521,13 +523,27 @@ class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
             dataset.metadata.crypt4gh_metadata_header_sha256 = sha256_metadata_header
             dataset.metadata.crypt4gh_dataset_header_sha256 = sha256_dataset_header
 
-            if crypt4gh_compute_keypair_id:
+            if crypt4gh_clear_compute_keypair and (
+                crypt4gh_compute_keypair_id or crypt4gh_compute_keypair_expiration_date
+            ):
+                raise ValueError(
+                    "Metadata fields 'crypt4gh_compute_keypair_id' and "
+                    "'crypt4gh_compute_keypair_expiration_date' cannot be set when "
+                    "'crypt4gh_clear_compute_keypair' is true."
+                )
+
+            if crypt4gh_clear_compute_keypair:
+                dataset.metadata.crypt4gh_compute_keypair_id = ""
+                dataset.metadata.crypt4gh_compute_keypair_expiration_date = ""
+            elif crypt4gh_compute_keypair_id:
                 dataset.metadata.crypt4gh_compute_keypair_id = crypt4gh_compute_keypair_id
             else:
                 prev_keypair_id = getattr(dataset.metadata, "crypt4gh_compute_keypair_id", None)
                 dataset.metadata.crypt4gh_compute_keypair_id = prev_keypair_id if prev_keypair_id else ""
 
-            if crypt4gh_compute_keypair_expiration_date:
+            if crypt4gh_clear_compute_keypair:
+                pass
+            elif crypt4gh_compute_keypair_expiration_date:
                 dataset.metadata.crypt4gh_compute_keypair_expiration_date = \
                     crypt4gh_compute_keypair_expiration_date.isoformat()
             else:

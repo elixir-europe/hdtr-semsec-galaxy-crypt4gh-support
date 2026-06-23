@@ -175,6 +175,34 @@ def test_crypt4gh_compute_keypair_fail_if_only_id_or_date(c4gh_loader, c4gh_data
             c4gh_loader.set_meta(dataset=dataset, crypt4gh_compute_keypair_expiration_date=date)
 
 
+def test_crypt4gh_set_meta_can_clear_compute_keypair_for_returned_outputs(
+    c4gh_loader,
+    c4gh_data_complete,
+    c4gh_data_header_recrypted,
+):
+    with c4gh_data_complete as data_complete:
+        dataset = data_complete.dataset
+
+        date = datetime(2023, 6, 30, 12, 15)
+        c4gh_loader.set_meta(
+            dataset=dataset,
+            crypt4gh_compute_keypair_id="cn:b38ac81f",
+            crypt4gh_compute_keypair_expiration_date=date,
+        )
+        assert dataset.metadata.crypt4gh_compute_keypair_id == "cn:b38ac81f"
+        assert dataset.metadata.crypt4gh_compute_keypair_expiration_date == "2023-06-30T12:15:00"
+
+        with c4gh_data_header_recrypted as data_header_recrypted:
+            c4gh_loader.set_meta(
+                dataset=dataset,
+                crypt4gh_header=data_header_recrypted.contents,
+                crypt4gh_clear_compute_keypair=True,
+            )
+
+        assert dataset.metadata.crypt4gh_compute_keypair_id == ""
+        assert dataset.metadata.crypt4gh_compute_keypair_expiration_date == ""
+
+
 def test_crypt4gh_set_meta_not_crypt4gh_data(c4gh_loader, c4gh_data_payload, c4gh_data_header):
     with c4gh_data_payload as data_payload:
         with pytest.raises(ValueError):
