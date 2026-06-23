@@ -6,6 +6,7 @@ import traceback
 from collections.abc import Callable
 from typing import (
     NamedTuple,
+    cast,
 )
 
 from galaxy.datatypes.registry import Registry
@@ -26,7 +27,10 @@ from galaxy.tools import (
     create_tool_from_representation,
     evaluation,
 )
-from galaxy.tools.crypt4gh_remote_execution import should_run_crypt4gh_remote_execution
+from galaxy.tools.crypt4gh_remote_execution import (
+    build_crypt4gh_remote_compute_environment,
+    should_run_crypt4gh_remote_execution,
+)
 from galaxy.tools.data import (
     from_dict,
     ToolDataTableManager,
@@ -112,10 +116,16 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         tool_data_table_manager=tdtm,
         file_sources=job_io.file_sources,
     )
+    destination_params = dict(job_io.job.destination_params or {})
+    # This entrypoint is only prepended for remote tool evaluation, but a
+    # globally configured tool_evaluation_strategy may not be persisted into
+    # per-job destination params in integration test setups.
+    destination_params.setdefault("tool_evaluation_strategy", "remote")
+
     is_crypt4gh_job = should_run_crypt4gh_remote_execution(
         job_io=job_io,
         app_config=app.config,
-        destination_params=job_io.job.destination_params or {},
+        destination_params=destination_params,
     )
     if is_crypt4gh_job:
         if job_io.tool_source is None or job_io.tool_source_class is None:
@@ -124,14 +134,26 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     # TODO: could try to serialize just a minimal tool variant instead of the whole thing ?
     tool = create_tool_from_representation(
         app=app,
-        raw_tool_source=job_io.tool_source,
+        raw_tool_source=cast(str, job_io.tool_source),
         tool_dir=job_io.tool_dir,
-        tool_source_class=job_io.tool_source_class,
+        tool_source_class=cast(str, job_io.tool_source_class),
     )
     tool_evaluator = evaluation.RemoteToolEvaluator(
         app=app, tool=tool, job=job_io.job, local_working_directory=WORKING_DIRECTORY
     )
-    tool_evaluator.set_compute_environment(compute_environment=SharedComputeEnvironment(job_io=job_io, job=job_io.job))
+    if is_crypt4gh_job:
+        reencryption_service_url = metadata_params.get("crypt4gh_reencryption_service_url")
+        if not reencryption_service_url:
+            raise Exception("Crypt4GH remote execution requires crypt4gh_reencryption_service_url")
+        compute_environment = build_crypt4gh_remote_compute_environment(
+            job_io=job_io,
+            job=job_io.job,
+            working_directory=WORKING_DIRECTORY,
+            reencryption_service_url=reencryption_service_url,
+        )
+    else:
+        compute_environment = SharedComputeEnvironment(job_io=job_io, job=job_io.job)
+    tool_evaluator.set_compute_environment(compute_environment=compute_environment)
     with open(os.path.join(WORKING_DIRECTORY, "tool_script.sh"), "a") as out:
         command_line, version_command_line, extra_filenames, environment_variables, *_ = tool_evaluator.build()
         out.write(f'{version_command_line or ""}{command_line}')
