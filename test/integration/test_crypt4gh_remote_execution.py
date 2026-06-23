@@ -7,7 +7,10 @@ import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import (
+    Any,
+    Callable,
+)
 
 import crypt4gh.header
 from crypt4gh.keys import get_private_key
@@ -26,6 +29,8 @@ from uvicorn import (
 from galaxy import model  # type: ignore[import-not-found]
 from galaxy_test.base.populators import DatasetPopulator  # type: ignore[import-not-found]
 from galaxy_test.driver import integration_util  # type: ignore[import-not-found]
+
+from galaxy.tools.crypt4gh_remote_execution import CRYPT4GH_CLEANUP_FAILED_MARKER
 
 
 class _RecryptToJobKeyRequest(BaseModel):
@@ -84,6 +89,7 @@ def _build_compute_recryptor_app(
     compute_public_key_path: str,
     compute_keypair_id: str,
     compute_keypair_expiration_date: str,
+    should_fail_recrypt_to_user_key: Callable[[], bool],
 ) -> FastAPI:
     user_private_key = get_private_key(user_private_key_path, lambda: b"")
     user_public_key = _to_raw_public_key_bytes(Path(user_public_key_path).read_text())
@@ -138,6 +144,9 @@ def _build_compute_recryptor_app(
         if params.crypt4gh_compute_keypair_id != compute_keypair_id:
             raise HTTPException(status_code=404, detail="Unknown crypt4gh_compute_keypair_id")
 
+        if should_fail_recrypt_to_user_key():
+            raise HTTPException(status_code=500, detail="forced recrypt_header_to_user_key failure")
+
         try:
             in_header_bytes = base64.b64decode(params.crypt4gh_header)
             packet_stream = io.BytesIO(in_header_bytes)
@@ -185,6 +194,7 @@ class _MockComputeRecryptorServer:
         self.port = _find_free_port()
         self._server: Server | None = None
         self._thread: threading.Thread | None = None
+        self.fail_recrypt_to_user_key = False
         self._app = _build_compute_recryptor_app(
             user_private_key_path=user_private_key_path,
             user_public_key_path=user_public_key_path,
@@ -192,6 +202,7 @@ class _MockComputeRecryptorServer:
             compute_public_key_path=compute_public_key_path,
             compute_keypair_id=compute_keypair_id,
             compute_keypair_expiration_date=compute_keypair_expiration_date,
+            should_fail_recrypt_to_user_key=lambda: self.fail_recrypt_to_user_key,
         )
 
     @property
@@ -390,6 +401,48 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert direct_output_hda.metadata.crypt4gh_header
         assert direct_output_hda.metadata.crypt4gh_compute_keypair_id == ""
         assert direct_output_hda.metadata.crypt4gh_compute_keypair_expiration_date == ""
+
+    def test_cleanup_failure_marks_job_error_and_emits_operator_attention_marker(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
+        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        sa_session.commit()
+
+        self._mock_compute_recryptor_server.fail_recrypt_to_user_key = True
+        try:
+            run_response = self.dataset_populator.run_tool(
+                "output_format",
+                {
+                    "input_data_1": {"src": "hda", "id": input_dataset_id},
+                    "input_data_2": {"src": "hda", "id": input_dataset_id},
+                    "input_text": "not_foo_or_bar",
+                },
+                history_id,
+            )
+            job_api_id = run_response["jobs"][0]["id"]
+            self.dataset_populator.wait_for_job(job_api_id, assert_ok=False)
+            job = self.dataset_populator.get_job_details(job_api_id, full=True).json()
+        finally:
+            self._mock_compute_recryptor_server.fail_recrypt_to_user_key = False
+
+        assert job["state"] == "error"
+        tool_stderr = job.get("tool_stderr", "")
+        assert CRYPT4GH_CLEANUP_FAILED_MARKER in tool_stderr
+        assert "Compute-side recryptor B returned HTTP 500" in tool_stderr
 
     def _collect_job_script_texts(self, job_working_directory: Path) -> list[str]:
         script_texts: list[str] = []

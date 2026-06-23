@@ -46,6 +46,9 @@ class Crypt4GHRemoteExecutionError(Exception):
     """Raised when execution-side Crypt4GH setup must fail closed."""
 
 
+CRYPT4GH_CLEANUP_FAILED_MARKER = "CRYPT4GH_CLEANUP_FAILED"
+
+
 class _HeaderThenBodyStream:
     def __init__(self, *, header_bytes: bytes, body_stream: BinaryIO) -> None:
         self._header = memoryview(header_bytes)
@@ -443,6 +446,42 @@ def finalize_declared_crypt4gh_outputs(
                 compute_encrypted_path.unlink()
             if final_tmp_path.exists():
                 final_tmp_path.unlink()
+
+
+def build_crypt4gh_cleanup_wrapped_command(*, tool_command: str, cleanup_command: str) -> str:
+    cleanup_command = cleanup_command.strip()
+    if not cleanup_command:
+        return tool_command
+
+    marker_line = (
+        f"    echo '{CRYPT4GH_CLEANUP_FAILED_MARKER}: cleanup failed with exit code "
+        "${_CRYPT4GH_CLEANUP_EXIT}' >&2"
+    )
+
+    lines = [
+        "if (",
+        tool_command,
+        "); then",
+        "    _CRYPT4GH_TOOL_EXIT=0",
+        "else",
+        "    _CRYPT4GH_TOOL_EXIT=$?",
+        "fi",
+        "if (",
+        cleanup_command,
+        "); then",
+        "    _CRYPT4GH_CLEANUP_EXIT=0",
+        "else",
+        "    _CRYPT4GH_CLEANUP_EXIT=$?",
+        marker_line,
+        "fi",
+        "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
+        "    exit $_CRYPT4GH_TOOL_EXIT",
+        "fi",
+        "if [ $_CRYPT4GH_CLEANUP_EXIT -ne 0 ]; then",
+        "    exit $_CRYPT4GH_CLEANUP_EXIT",
+        "fi",
+    ]
+    return "\n".join(lines)
 
 
 def _encrypt_plaintext_to_compute_key(

@@ -29,6 +29,7 @@ from galaxy.tools import (
     evaluation,
 )
 from galaxy.tools.crypt4gh_remote_execution import (
+    build_crypt4gh_cleanup_wrapped_command,
     build_crypt4gh_remote_compute_environment,
     collect_declared_crypt4gh_output_targets,
     finalize_declared_crypt4gh_outputs,
@@ -161,6 +162,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     tool_evaluator.set_compute_environment(compute_environment=compute_environment)
     with open(os.path.join(WORKING_DIRECTORY, "tool_script.sh"), "a") as out:
         command_line, version_command_line, extra_filenames, environment_variables, *_ = tool_evaluator.build()
+        cleanup_command = ""
         if is_crypt4gh_job:
             output_targets = collect_declared_crypt4gh_output_targets(
                 job_io=job_io,
@@ -184,11 +186,14 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                     f"compute_public_key={json.dumps(compute_public_key)}, "
                     f"compute_keypair_id={json.dumps(compute_keypair_id)})"
                 )
-                command_line = (
-                    f"{command_line}\n"
+                cleanup_command = (
                     f"PYTHONPATH={shlex.quote(galaxy_lib_for_finalize)}:$PYTHONPATH "
                     f"python -c {shlex.quote(finalize_script)}"
                 )
+        command_line = build_crypt4gh_cleanup_wrapped_command(
+            tool_command=command_line or "",
+            cleanup_command=cleanup_command,
+        )
         out.write(f'{version_command_line or ""}{command_line}')
 
 

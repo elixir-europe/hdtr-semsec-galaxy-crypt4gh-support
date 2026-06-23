@@ -1,9 +1,12 @@
 from datetime import datetime
+import subprocess
 
 import pytest
 
 from galaxy.jobs.runners import BaseJobRunner
 from galaxy.tools.crypt4gh_remote_execution import (
+    build_crypt4gh_cleanup_wrapped_command,
+    CRYPT4GH_CLEANUP_FAILED_MARKER,
     Crypt4GHRemoteExecutionError,
     should_run_crypt4gh_remote_execution,
 )
@@ -104,3 +107,25 @@ def test_prepare_job_freezes_old_staging_path_when_remote_strategy_is_enabled():
     command_line = BaseJobRunner._apply_crypt4gh_staging(object(), job_wrapper, "echo hello")
 
     assert command_line == "echo hello"
+
+
+def test_cleanup_wrapper_runs_after_tool_failure_and_preserves_diagnostics(tmp_path):
+    cleanup_marker = tmp_path / "cleanup-ran"
+    tool_command = "python -c \"raise RuntimeError('ORIGINAL_TOOL_EXCEPTION')\""
+    cleanup_command = (
+        "python -c \"from pathlib import Path; "
+        f"Path({str(cleanup_marker)!r}).write_text('yes'); "
+        "raise RuntimeError('CLEANUP_EXCEPTION')\""
+    )
+    wrapped_command = build_crypt4gh_cleanup_wrapped_command(
+        tool_command=tool_command,
+        cleanup_command=cleanup_command,
+    )
+
+    completed = subprocess.run(["/bin/bash", "-c", wrapped_command], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 1
+    assert cleanup_marker.exists()
+    assert "ORIGINAL_TOOL_EXCEPTION" in completed.stderr
+    assert "CLEANUP_EXCEPTION" in completed.stderr
+    assert CRYPT4GH_CLEANUP_FAILED_MARKER in completed.stderr
