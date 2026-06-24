@@ -49,6 +49,8 @@ class Crypt4GHRemoteExecutionError(Exception):
 
 
 CRYPT4GH_CLEANUP_FAILED_MARKER = "CRYPT4GH_CLEANUP_FAILED"
+_DEFAULT_MINIMUM_TTL = timedelta(days=1)
+_DESTINATION_WALLTIME_BUFFER = timedelta(hours=1)
 
 
 class _HeaderThenBodyStream:
@@ -137,7 +139,7 @@ def build_crypt4gh_remote_compute_environment(
     job: Job,
     working_directory: str,
     reencryption_service_url: str,
-    minimum_ttl: timedelta = timedelta(days=1),
+    minimum_ttl: Optional[timedelta] = None,
     now: Optional[datetime] = None,
 ) -> Crypt4GHRemoteComputeEnvironment:
     crypt4gh_inputs = _collect_crypt4gh_inputs(job_io)
@@ -146,8 +148,13 @@ def build_crypt4gh_remote_compute_environment(
             "Crypt4GH remote execution requested but no Crypt4GH inputs were detected"
         )
 
+    destination_params = dict(getattr(job, "destination_params", {}) or {})
+    effective_minimum_ttl = _minimum_ttl_for_destination(
+        destination_params=destination_params,
+        fallback_minimum_ttl=minimum_ttl or _DEFAULT_MINIMUM_TTL,
+    )
     current_time = now or datetime.now(timezone.utc)
-    _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=minimum_ttl, now=current_time)
+    _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=effective_minimum_ttl, now=current_time)
 
     crypt_inputs_workspace = _ensure_crypt4gh_inputs_workspace(working_directory)
     job_private_key, job_public_key = _generate_job_keypair()
@@ -202,7 +209,7 @@ def should_run_crypt4gh_remote_execution(
     job_io: JobIO,
     app_config: _Crypt4GHAppConfig,
     destination_params: dict[str, Any],
-    minimum_ttl: timedelta = timedelta(days=1),
+    minimum_ttl: Optional[timedelta] = None,
     now: Optional[datetime] = None,
 ) -> bool:
     """Decide whether execution-side Crypt4GH setup is allowed for this job.
@@ -224,9 +231,38 @@ def should_run_crypt4gh_remote_execution(
     if not crypt4gh_inputs:
         return False
 
+    effective_minimum_ttl = _minimum_ttl_for_destination(
+        destination_params=destination_params,
+        fallback_minimum_ttl=minimum_ttl or _DEFAULT_MINIMUM_TTL,
+    )
     current_time = now or datetime.now(timezone.utc)
-    _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=minimum_ttl, now=current_time)
+    _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=effective_minimum_ttl, now=current_time)
     return True
+
+
+def _minimum_ttl_for_destination(*, destination_params: Mapping[str, Any], fallback_minimum_ttl: timedelta) -> timedelta:
+    walltime_value = destination_params.get("walltime")
+    walltime_delta = _parse_destination_walltime(walltime_value)
+    if walltime_delta is None:
+        return fallback_minimum_ttl
+    return walltime_delta + _DESTINATION_WALLTIME_BUFFER
+
+
+def _parse_destination_walltime(walltime_value: Any) -> Optional[timedelta]:
+    if not isinstance(walltime_value, str):
+        return None
+    parts = walltime_value.strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours, minutes, seconds = (int(part) for part in parts)
+    except ValueError:
+        return None
+    if hours < 0 or minutes < 0 or seconds < 0:
+        return None
+    if minutes >= 60 or seconds >= 60:
+        return None
+    return timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
 
 def _collect_crypt4gh_inputs(job_io: JobIO) -> list[DatasetInstance]:
@@ -242,6 +278,14 @@ def _ensure_crypt4gh_inputs_workspace(working_directory: str) -> Path:
     workspace = Path(working_directory) / "_crypt" / "inputs"
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
+
+
+def cleanup_crypt4gh_plaintext_artifacts(*, working_directory: str) -> None:
+    crypt_root = Path(working_directory) / "_crypt"
+    for child_name in ("inputs", "outputs"):
+        child_path = crypt_root / child_name
+        if child_path.exists():
+            shutil.rmtree(child_path)
 
 
 def _format_crypt4gh_public_key(public_key: bytes) -> str:
@@ -334,7 +378,8 @@ def _recrypt_header_to_job_key(
 
     if not response.ok:
         raise Crypt4GHRemoteExecutionError(
-            f"Compute-side recryptor B returned HTTP {response.status_code} for {endpoint}: {response.text}"
+            f"Compute-side recryptor B returned HTTP {response.status_code} for {endpoint}: "
+            f"{_summarize_http_error_response(response)}"
         )
 
     try:
@@ -603,10 +648,42 @@ def _write_discovered_designation_marker(*, marker_map_path: Path, designation: 
     marker_map_path.write_text(json.dumps(marker_map))
 
 
-def build_crypt4gh_cleanup_wrapped_command(*, tool_command: str, cleanup_command: str) -> str:
+def build_crypt4gh_cleanup_wrapped_command(
+    *, tool_command: str, cleanup_command: str, postrun_command: str = ""
+) -> str:
+    postrun_command = postrun_command.strip()
     cleanup_command = cleanup_command.strip()
     if not cleanup_command:
-        return tool_command
+        if not postrun_command:
+            return tool_command
+        return "\n".join(
+            [
+                "if (",
+                tool_command,
+                "); then",
+                "    _CRYPT4GH_TOOL_EXIT=0",
+                "else",
+                "    _CRYPT4GH_TOOL_EXIT=$?",
+                "fi",
+                "if [ $_CRYPT4GH_TOOL_EXIT -eq 0 ]; then",
+                "    if (",
+                postrun_command,
+                "    ); then",
+                "        _CRYPT4GH_POSTRUN_EXIT=0",
+                "    else",
+                "        _CRYPT4GH_POSTRUN_EXIT=$?",
+                "    fi",
+                "else",
+                "    _CRYPT4GH_POSTRUN_EXIT=0",
+                "fi",
+                "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
+                "    exit $_CRYPT4GH_TOOL_EXIT",
+                "fi",
+                "if [ $_CRYPT4GH_POSTRUN_EXIT -ne 0 ]; then",
+                "    exit $_CRYPT4GH_POSTRUN_EXIT",
+                "fi",
+            ]
+        )
 
     marker_line = (
         f"    echo '{CRYPT4GH_CLEANUP_FAILED_MARKER}: cleanup failed with exit code "
@@ -621,6 +698,27 @@ def build_crypt4gh_cleanup_wrapped_command(*, tool_command: str, cleanup_command
         "else",
         "    _CRYPT4GH_TOOL_EXIT=$?",
         "fi",
+    ]
+    if postrun_command:
+        lines.extend(
+            [
+                "if [ $_CRYPT4GH_TOOL_EXIT -eq 0 ]; then",
+                "    if (",
+                postrun_command,
+                "    ); then",
+                "        _CRYPT4GH_POSTRUN_EXIT=0",
+                "    else",
+                "        _CRYPT4GH_POSTRUN_EXIT=$?",
+                "    fi",
+                "else",
+                "    _CRYPT4GH_POSTRUN_EXIT=0",
+                "fi",
+            ]
+        )
+    else:
+        lines.extend(["_CRYPT4GH_POSTRUN_EXIT=0"])
+    lines.extend(
+        [
         "if (",
         cleanup_command,
         "); then",
@@ -632,10 +730,14 @@ def build_crypt4gh_cleanup_wrapped_command(*, tool_command: str, cleanup_command
         "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
         "    exit $_CRYPT4GH_TOOL_EXIT",
         "fi",
+        "if [ $_CRYPT4GH_POSTRUN_EXIT -ne 0 ]; then",
+        "    exit $_CRYPT4GH_POSTRUN_EXIT",
+        "fi",
         "if [ $_CRYPT4GH_CLEANUP_EXIT -ne 0 ]; then",
         "    exit $_CRYPT4GH_CLEANUP_EXIT",
         "fi",
     ]
+    )
     return "\n".join(lines)
 
 
@@ -702,7 +804,8 @@ def _recrypt_header_to_user_key(
 
     if not response.ok:
         raise Crypt4GHRemoteExecutionError(
-            f"Compute-side recryptor B returned HTTP {response.status_code} for {endpoint}: {response.text}"
+            f"Compute-side recryptor B returned HTTP {response.status_code} for {endpoint}: "
+            f"{_summarize_http_error_response(response)}"
         )
 
     try:
@@ -721,6 +824,36 @@ def _parse_crypt4gh_public_key(public_key_pem: str) -> bytes:
         return base64.b64decode("".join(lines[1:-1]))
     except ValueError as exc:
         raise Crypt4GHRemoteExecutionError("Invalid CRYPT4GH public key payload") from exc
+
+
+def _summarize_http_error_response(response: requests.Response) -> str:
+    detail: Any = None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        for key in ("detail", "message", "error"):
+            candidate = payload.get(key)
+            if candidate:
+                detail = candidate
+                break
+        if detail is None and payload:
+            detail = payload
+    elif isinstance(payload, list):
+        detail = payload
+    elif isinstance(payload, str):
+        detail = payload
+    else:
+        detail = response.text
+
+    summary = re.sub(r"\s+", " ", str(detail or "")).strip()
+    if not summary:
+        return "no error details provided"
+    if len(summary) > 200:
+        return f"{summary[:200]}..."
+    return summary
 
 
 def _decrypt_recrypted_input(

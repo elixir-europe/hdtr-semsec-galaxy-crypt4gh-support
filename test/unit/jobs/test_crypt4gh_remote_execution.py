@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from galaxy.jobs.runners import BaseJobRunner
+import galaxy.tools.crypt4gh_remote_execution as crypt4gh_remote_execution
 from galaxy.tools.crypt4gh_remote_execution import (
     build_crypt4gh_remote_compute_environment,
     build_crypt4gh_cleanup_wrapped_command,
@@ -57,6 +58,11 @@ class _BuildDataset:
     def __init__(self, *, dataset_id, metadata):
         self.dataset = _DatasetWrapper(dataset_id=dataset_id)
         self.metadata = metadata
+
+
+class _BuildJob:
+    def __init__(self, destination_params=None):
+        self.destination_params = destination_params or {}
 
 
 @pytest.fixture
@@ -140,6 +146,25 @@ def test_cleanup_wrapper_runs_after_tool_failure_and_preserves_diagnostics(tmp_p
     assert CRYPT4GH_CLEANUP_FAILED_MARKER in completed.stderr
 
 
+def test_cleanup_wrapper_reports_postrun_errors_without_cleanup_failure_marker(tmp_path):
+    cleanup_marker = tmp_path / "cleanup-ran"
+    wrapped_command = build_crypt4gh_cleanup_wrapped_command(
+        tool_command="python -c \"print('ok')\"",
+        postrun_command="python -c \"raise RuntimeError('POSTRUN_EXCEPTION')\"",
+        cleanup_command=(
+            "python -c \"from pathlib import Path; "
+            f"Path({str(cleanup_marker)!r}).write_text('yes')\""
+        ),
+    )
+
+    completed = subprocess.run(["/bin/bash", "-c", wrapped_command], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 1
+    assert cleanup_marker.exists()
+    assert "POSTRUN_EXCEPTION" in completed.stderr
+    assert CRYPT4GH_CLEANUP_FAILED_MARKER not in completed.stderr
+
+
 def test_local_minimum_ttl_gate_runs_before_any_recrypt_b_call(monkeypatch):
     dataset = _BuildDataset(
         dataset_id=1,
@@ -164,7 +189,7 @@ def test_local_minimum_ttl_gate_runs_before_any_recrypt_b_call(monkeypatch):
     with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
         build_crypt4gh_remote_compute_environment(
             job_io=_JobIO([dataset]),
-            job=object(),
+            job=_BuildJob(),
             working_directory="/tmp",
             reencryption_service_url="http://example.invalid",
             minimum_ttl=timedelta(days=1),
@@ -172,6 +197,101 @@ def test_local_minimum_ttl_gate_runs_before_any_recrypt_b_call(monkeypatch):
         )
 
     assert recrypt_attempted is False
+
+
+def test_should_run_uses_destination_walltime_plus_one_hour_buffer():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T01:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_transparent_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote", "walltime": "00:15:00"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
+def test_should_run_falls_back_to_24h_when_walltime_is_unparseable():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T06:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_transparent_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote", "walltime": "invalid"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
+def test_build_environment_uses_job_destination_walltime_before_any_recrypt_call(monkeypatch):
+    dataset = _BuildDataset(
+        dataset_id=1,
+        metadata=_DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T00:30:00+00:00",
+        ),
+    )
+
+    recrypt_attempted = False
+
+    def _sentinel_prepare_plaintext_input_for_dataset(**_kwargs):
+        nonlocal recrypt_attempted
+        recrypt_attempted = True
+        raise AssertionError("should not call recrypt path when derived minimum TTL gate fails")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._prepare_plaintext_input_for_dataset",
+        _sentinel_prepare_plaintext_input_for_dataset,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        build_crypt4gh_remote_compute_environment(
+            job_io=_JobIO([dataset]),
+            job=_BuildJob(destination_params={"walltime": "00:10:00"}),
+            working_directory="/tmp",
+            reencryption_service_url="http://example.invalid",
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+    assert recrypt_attempted is False
+
+
+def test_recrypt_http_errors_do_not_expose_raw_response_text(monkeypatch):
+    raw_response_text = "TOP-SECRET\n" + ("x" * 500)
+
+    class _BadResponse:
+        ok = False
+        status_code = 500
+        text = raw_response_text
+
+        def json(self):
+            raise ValueError("no json")
+
+    def _fake_post(*_args, **_kwargs):
+        return _BadResponse()
+
+    monkeypatch.setattr(crypt4gh_remote_execution.requests, "post", _fake_post)
+
+    with pytest.raises(Crypt4GHRemoteExecutionError) as exc_info:
+        crypt4gh_remote_execution._recrypt_header_to_user_key(
+            reencryption_service_url="http://example.invalid",
+            crypt4gh_header="Zm9v",
+            compute_keypair_id="compute-key",
+        )
+
+    message = str(exc_info.value)
+    assert "Compute-side recryptor B returned HTTP 500" in message
+    assert raw_response_text not in message
 
 
 def test_finalize_discovered_outputs_writes_path_markers(tmp_path, monkeypatch):
