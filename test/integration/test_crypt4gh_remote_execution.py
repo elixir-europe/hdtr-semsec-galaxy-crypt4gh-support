@@ -26,6 +26,7 @@ from fastapi import (
     HTTPException,
 )
 from pydantic import BaseModel
+import requests
 from uvicorn import (
     Config,
     Server,
@@ -245,14 +246,27 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
     framework_tool_and_types = True
     dataset_populator: DatasetPopulator
 
+    _default_mock_compute_keypair_id = "mock-compute-key-1"
+    _default_mock_compute_keypair_expiration_date = "2099-01-01T00:00:00+00:00"
     _mock_compute_keypair_id = "mock-compute-key-1"
     _mock_compute_keypair_expiration_date = "2099-01-01T00:00:00+00:00"
     _mock_compute_recryptor_server: _MockComputeRecryptorServer
+    _external_reencryption_service_url: str | None = None
+    _live_compute_public_key: str | None = None
 
     @classmethod
     def _prepare_galaxy(cls) -> None:
+        cls._external_reencryption_service_url = os.environ.get("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL")
         user_private_key = os.path.join("test-data", "crypt4gh", "user_key.sec")
         user_public_key = os.path.join("test-data", "crypt4gh", "user_key.pub")
+
+        if cls._external_reencryption_service_url:
+            cls._refresh_live_compute_keypair_metadata(user_public_key_path=user_public_key)
+            return
+
+        cls._live_compute_public_key = None
+        cls._mock_compute_keypair_id = cls._default_mock_compute_keypair_id
+        cls._mock_compute_keypair_expiration_date = cls._default_mock_compute_keypair_expiration_date
         compute_private_key = os.path.join("test-data", "crypt4gh", "compute_key.sec")
         compute_public_key = os.path.join("test-data", "crypt4gh", "compute_key.pub")
         cls._mock_compute_recryptor_server = _MockComputeRecryptorServer(
@@ -266,8 +280,73 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         cls._mock_compute_recryptor_server.start()
 
     @classmethod
+    def _refresh_live_compute_keypair_metadata(cls, *, user_public_key_path: str) -> None:
+        service_url = cls._external_reencryption_service_url
+        if not service_url:
+            raise RuntimeError("Live-service URL must be set before refreshing compute keypair metadata")
+
+        endpoint = f"{service_url.rstrip('/')}/get_compute_key_info"
+        payload = {"crypt4gh_user_public_key": Path(user_public_key_path).read_text()}
+        try:
+            response = requests.post(endpoint, json=payload, timeout=30)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Unable to contact live recryptor service at {endpoint}: {exc}") from exc
+
+        if not response.ok:
+            raise RuntimeError(
+                f"Live recryptor service returned HTTP {response.status_code} for {endpoint}: {response.text}"
+            )
+
+        try:
+            response_json = response.json()
+            cls._mock_compute_keypair_id = response_json["crypt4gh_compute_keypair_id"]
+            cls._mock_compute_keypair_expiration_date = response_json["crypt4gh_compute_keypair_expiration_date"]
+            cls._live_compute_public_key = response_json["crypt4gh_compute_public_key"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise RuntimeError("Live recryptor service returned invalid /get_compute_key_info payload") from exc
+
+    @classmethod
+    def _header_recrypted_to_live_compute_key(cls, header: str) -> str:
+        if not cls._external_reencryption_service_url:
+            return header
+
+        compute_public_key = cls._live_compute_public_key
+        if not compute_public_key:
+            raise RuntimeError("Live compute public key is unavailable for header rewriting")
+
+        user_private_key = get_private_key(os.path.join("test-data", "crypt4gh", "user_key.sec"), lambda: b"")
+        compute_public_key_bytes = _to_raw_public_key_bytes(compute_public_key)
+
+        in_header_bytes = base64.b64decode(header)
+        packet_stream = io.BytesIO(in_header_bytes)
+        packets = list(crypt4gh.header.parse(packet_stream))
+        ephemeral_private_key = X25519PrivateKey.generate().private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        recrypted_packets = list(
+            crypt4gh.header.reencrypt(
+                packets,
+                keys=[(0, user_private_key, None)],
+                recipient_keys=[(0, ephemeral_private_key, compute_public_key_bytes)],
+            )
+        )
+        return base64.b64encode(crypt4gh.header.serialize(recrypted_packets)).decode("ascii")
+
+    @classmethod
+    def _set_input_compute_metadata(cls, hda: model.HistoryDatasetAssociation) -> None:
+        hda.metadata.crypt4gh_compute_keypair_id = cls._mock_compute_keypair_id
+        hda.metadata.crypt4gh_compute_keypair_expiration_date = cls._mock_compute_keypair_expiration_date
+
+        if cls._external_reencryption_service_url:
+            source_header = hda.metadata.crypt4gh_header
+            assert source_header
+            hda.metadata.crypt4gh_header = cls._header_recrypted_to_live_compute_key(source_header)
+
+    @classmethod
     def tearDownClass(cls) -> None:
-        if hasattr(cls, "_mock_compute_recryptor_server"):
+        if cls._external_reencryption_service_url is None and hasattr(cls, "_mock_compute_recryptor_server"):
             cls._mock_compute_recryptor_server.stop()
         super().tearDownClass()
 
@@ -278,7 +357,10 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         config["metadata_strategy"] = "extended"
         config["enable_crypt4gh_transparent_staging"] = True
         config["tool_evaluation_strategy"] = "remote"
-        config["crypt4gh_reencryption_service_url"] = cls._mock_compute_recryptor_server.url
+        if cls._external_reencryption_service_url:
+            config["crypt4gh_reencryption_service_url"] = cls._external_reencryption_service_url
+        else:
+            config["crypt4gh_reencryption_service_url"] = cls._mock_compute_recryptor_server.url
         config["cleanup_job"] = "never"
 
     def setUp(self) -> None:
@@ -301,8 +383,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         sa_session = self._app.model.session
         hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
         assert hda is not None
-        hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
-        hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        self._set_input_compute_metadata(hda)
         sa_session.commit()
 
         run_response = self.dataset_populator.run_tool(
@@ -365,8 +446,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         sa_session = self._app.model.session
         input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
         assert input_hda is not None
-        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
-        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        self._set_input_compute_metadata(input_hda)
         sa_session.commit()
 
         run_response = self.dataset_populator.run_tool(
@@ -432,8 +512,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         sa_session = self._app.model.session
         input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
         assert input_hda is not None
-        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
-        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        self._set_input_compute_metadata(input_hda)
         sa_session.commit()
 
         self._mock_compute_recryptor_server.fail_recrypt_to_user_key = True
@@ -474,8 +553,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         sa_session = self._app.model.session
         input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
         assert input_hda is not None
-        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
-        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        self._set_input_compute_metadata(input_hda)
         sa_session.commit()
 
         run_response = self.dataset_populator.run_tool(
@@ -532,7 +610,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         sa_session = self._app.model.session
         input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
         assert input_hda is not None
-        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
+        self._set_input_compute_metadata(input_hda)
         too_soon = datetime.now(timezone.utc) + timedelta(minutes=10)
         input_hda.metadata.crypt4gh_compute_keypair_expiration_date = too_soon.isoformat()
         sa_session.commit()
@@ -565,8 +643,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         sa_session = self._app.model.session
         input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
         assert input_hda is not None
-        input_hda.metadata.crypt4gh_compute_keypair_id = self._mock_compute_keypair_id
-        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = self._mock_compute_keypair_expiration_date
+        self._set_input_compute_metadata(input_hda)
         sa_session.commit()
 
         previous_expiration = self._mock_compute_recryptor_server.compute_keypair_expiration_date
@@ -606,6 +683,63 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
             except OSError:
                 pass
         return script_texts
+
+
+def test_prepare_galaxy_skips_mock_server_when_live_service_url_set(monkeypatch) -> None:
+    class _UnexpectedMockServer:
+        def __init__(self, *args, **kwargs):
+            del args
+            del kwargs
+            raise AssertionError("Mock compute recryptor should not be constructed for live-service smoke mode")
+
+    monkeypatch.setenv("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL", "http://127.0.0.1:9001")
+    monkeypatch.setattr(
+        TestCrypt4GHRemoteExecutionIntegration,
+        "_refresh_live_compute_keypair_metadata",
+        classmethod(lambda cls, *, user_public_key_path: None),
+    )
+    monkeypatch.setattr(
+        f"{__name__}._MockComputeRecryptorServer",
+        _UnexpectedMockServer,
+    )
+
+    TestCrypt4GHRemoteExecutionIntegration._prepare_galaxy()
+
+
+def test_handle_galaxy_config_kwds_prefers_live_service_url(monkeypatch) -> None:
+    class _FakeMockServer:
+        url = "http://127.0.0.1:9002"
+
+    TestCrypt4GHRemoteExecutionIntegration._mock_compute_recryptor_server = _FakeMockServer()
+    monkeypatch.setenv("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL", "http://127.0.0.1:9001")
+
+    config: dict[str, Any] = {}
+    TestCrypt4GHRemoteExecutionIntegration.handle_galaxy_config_kwds(config)
+
+    assert config["crypt4gh_reencryption_service_url"] == "http://127.0.0.1:9001"
+
+
+def test_prepare_galaxy_live_service_updates_compute_keypair_metadata(monkeypatch) -> None:
+    captured_public_key_path = ""
+
+    def _fake_refresh(cls, *, user_public_key_path: str) -> None:
+        nonlocal captured_public_key_path
+        captured_public_key_path = user_public_key_path
+        cls._mock_compute_keypair_id = "live-key-id"
+        cls._mock_compute_keypair_expiration_date = "2099-03-01T00:00:00+00:00"
+
+    monkeypatch.setenv("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL", "http://127.0.0.1:9001")
+    monkeypatch.setattr(
+        TestCrypt4GHRemoteExecutionIntegration,
+        "_refresh_live_compute_keypair_metadata",
+        classmethod(_fake_refresh),
+    )
+
+    TestCrypt4GHRemoteExecutionIntegration._prepare_galaxy()
+
+    assert captured_public_key_path == os.path.join("test-data", "crypt4gh", "user_key.pub")
+    assert TestCrypt4GHRemoteExecutionIntegration._mock_compute_keypair_id == "live-key-id"
+    assert TestCrypt4GHRemoteExecutionIntegration._mock_compute_keypair_expiration_date == "2099-03-01T00:00:00+00:00"
 
 
 instance = integration_util.integration_module_instance(TestCrypt4GHRemoteExecutionIntegration)
