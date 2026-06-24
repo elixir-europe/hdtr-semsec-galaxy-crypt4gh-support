@@ -1,3 +1,5 @@
+"""Crypt4GH helpers for remote tool execution and output finalization."""
+
 from __future__ import annotations
 
 import base64
@@ -13,13 +15,15 @@ from datetime import (
     timezone,
 )
 from pathlib import Path
+from collections.abc import (
+    Mapping,
+    Sequence,
+)
 from typing import (
     Any,
     BinaryIO,
-    Mapping,
     Optional,
     Protocol,
-    Sequence,
     TYPE_CHECKING,
     cast,
 )
@@ -54,6 +58,8 @@ _DESTINATION_WALLTIME_BUFFER = timedelta(hours=1)
 
 
 class _HeaderThenBodyStream:
+    """Stream wrapper that prepends a replacement Crypt4GH header."""
+
     def __init__(self, *, header_bytes: bytes, body_stream: BinaryIO) -> None:
         self._header = memoryview(header_bytes)
         self._header_pos = 0
@@ -106,7 +112,18 @@ class _DeclaredCrypt4GHOutputTarget:
     encrypted_ext: str
 
 
+@dataclass(frozen=True)
+class _ComputeKeyContext:
+    """Compute-side key context inferred from recrypt responses."""
+
+    public_key: str
+    keypair_id: str
+    keypair_expiration_date: str
+
+
 class Crypt4GHRemoteComputeEnvironment(SharedComputeEnvironment):
+    """Compute environment that rewrites remote input paths for Crypt4GH jobs."""
+
     def __init__(
         self,
         *,
@@ -124,6 +141,8 @@ class Crypt4GHRemoteComputeEnvironment(SharedComputeEnvironment):
         self.compute_keypair_expiration_date = compute_keypair_expiration_date
 
     def input_path_rewrite(self, dataset: DatasetInstance) -> str:
+        """Return plaintext override path for staged Crypt4GH input datasets."""
+
         dataset_object = getattr(dataset, "dataset", None)
         dataset_id = getattr(dataset_object, "id", None)
         if isinstance(dataset_id, int):
@@ -142,6 +161,8 @@ def build_crypt4gh_remote_compute_environment(
     minimum_ttl: Optional[timedelta] = None,
     now: Optional[datetime] = None,
 ) -> Crypt4GHRemoteComputeEnvironment:
+    """Build remote compute environment with staged plaintext Crypt4GH inputs."""
+
     crypt4gh_inputs = _collect_crypt4gh_inputs(job_io)
     if not crypt4gh_inputs:
         raise Crypt4GHRemoteExecutionError(
@@ -158,12 +179,36 @@ def build_crypt4gh_remote_compute_environment(
 
     crypt_inputs_workspace = _ensure_crypt4gh_inputs_workspace(working_directory)
     job_private_key, job_public_key = _generate_job_keypair()
+    input_path_overrides_by_dataset_id, compute_context = _prepare_plaintext_inputs(
+        datasets=crypt4gh_inputs,
+        crypt_inputs_workspace=crypt_inputs_workspace,
+        reencryption_service_url=reencryption_service_url,
+        job_public_key=job_public_key,
+        job_private_key=job_private_key,
+    )
 
+    return Crypt4GHRemoteComputeEnvironment(
+        job_io=job_io,
+        job=job,
+        input_path_overrides_by_dataset_id=input_path_overrides_by_dataset_id,
+        compute_public_key=compute_context.public_key,
+        compute_keypair_id=compute_context.keypair_id,
+        compute_keypair_expiration_date=compute_context.keypair_expiration_date,
+    )
+
+
+def _prepare_plaintext_inputs(
+    *,
+    datasets: Sequence[DatasetInstance],
+    crypt_inputs_workspace: Path,
+    reencryption_service_url: str,
+    job_public_key: str,
+    job_private_key: bytes,
+) -> tuple[dict[int, str], _ComputeKeyContext]:
     input_path_overrides_by_dataset_id: dict[int, str] = {}
-    compute_public_key: Optional[str] = None
-    compute_keypair_id: Optional[str] = None
-    compute_keypair_expiration_date: Optional[str] = None
-    for dataset in crypt4gh_inputs:
+    compute_context: Optional[_ComputeKeyContext] = None
+
+    for dataset in datasets:
         dataset_id, plaintext_path, recrypt_result = _prepare_plaintext_input_for_dataset(
             dataset=dataset,
             crypt_inputs_workspace=crypt_inputs_workspace,
@@ -173,35 +218,37 @@ def build_crypt4gh_remote_compute_environment(
         )
         input_path_overrides_by_dataset_id[dataset_id] = plaintext_path
 
-        if compute_public_key is None:
-            compute_public_key = recrypt_result.crypt4gh_compute_public_key
-        elif compute_public_key != recrypt_result.crypt4gh_compute_public_key:
-            raise Crypt4GHRemoteExecutionError(
-                "Crypt4GH job inputs reference multiple compute public keys; mixed key contexts are unsupported"
-            )
+        candidate_context = _ComputeKeyContext(
+            public_key=recrypt_result.crypt4gh_compute_public_key,
+            keypair_id=recrypt_result.crypt4gh_compute_keypair_id,
+            keypair_expiration_date=recrypt_result.crypt4gh_compute_keypair_expiration_date,
+        )
+        if compute_context is None:
+            compute_context = candidate_context
+        else:
+            _assert_consistent_compute_key_context(existing=compute_context, candidate=candidate_context)
 
-        if compute_keypair_id is None:
-            compute_keypair_id = recrypt_result.crypt4gh_compute_keypair_id
-        elif compute_keypair_id != recrypt_result.crypt4gh_compute_keypair_id:
-            raise Crypt4GHRemoteExecutionError(
-                "Crypt4GH job inputs reference multiple compute keypair ids; mixed key contexts are unsupported"
-            )
+    if compute_context is None:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH remote execution requested but no Crypt4GH inputs were detected"
+        )
 
-        if compute_keypair_expiration_date is None:
-            compute_keypair_expiration_date = recrypt_result.crypt4gh_compute_keypair_expiration_date
-        elif compute_keypair_expiration_date != recrypt_result.crypt4gh_compute_keypair_expiration_date:
-            raise Crypt4GHRemoteExecutionError(
-                "Crypt4GH job inputs reference multiple compute key expiry timestamps; mixed key contexts are unsupported"
-            )
+    return input_path_overrides_by_dataset_id, compute_context
 
-    return Crypt4GHRemoteComputeEnvironment(
-        job_io=job_io,
-        job=job,
-        input_path_overrides_by_dataset_id=input_path_overrides_by_dataset_id,
-        compute_public_key=compute_public_key,
-        compute_keypair_id=compute_keypair_id,
-        compute_keypair_expiration_date=compute_keypair_expiration_date,
-    )
+
+def _assert_consistent_compute_key_context(*, existing: _ComputeKeyContext, candidate: _ComputeKeyContext) -> None:
+    if existing.public_key != candidate.public_key:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH job inputs reference multiple compute public keys; mixed key contexts are unsupported"
+        )
+    if existing.keypair_id != candidate.keypair_id:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH job inputs reference multiple compute keypair ids; mixed key contexts are unsupported"
+        )
+    if existing.keypair_expiration_date != candidate.keypair_expiration_date:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH job inputs reference multiple compute key expiry timestamps; mixed key contexts are unsupported"
+        )
 
 
 def should_run_crypt4gh_remote_execution(
@@ -281,6 +328,8 @@ def _ensure_crypt4gh_inputs_workspace(working_directory: str) -> Path:
 
 
 def cleanup_crypt4gh_plaintext_artifacts(*, working_directory: str) -> None:
+    """Delete staged Crypt4GH plaintext input and output directories."""
+
     crypt_root = Path(working_directory) / "_crypt"
     for child_name in ("inputs", "outputs"):
         child_path = crypt_root / child_name
@@ -403,97 +452,149 @@ def collect_declared_crypt4gh_output_targets(
     datatypes_registry: Any,
     working_directory: str,
 ) -> list[dict[str, Any]]:
+    """Collect declared and discovered outputs that require Crypt4GH finalization."""
+
     targets: list[dict[str, Any]] = []
     marker_dir = Path(working_directory) / "_c4gh_stage" / "outputs"
     plaintext_root = Path(working_directory) / "_crypt" / "outputs"
     tool_working_directory = Path(working_directory) / "working"
 
     for output_name, (dataset, dataset_path) in job_io.get_output_hdas_and_fnames().items():
-        output_name_for_tool_lookup = output_name
-        if output_name not in tool_outputs:
-            if output_name.startswith("__new_primary_file_"):
-                output_name_for_tool_lookup = output_name[len("__new_primary_file_") :].split("|", 1)[0]
-            else:
-                continue
+        output_name_for_tool_lookup = _resolve_output_name_for_tool_lookup(
+            output_name=output_name,
+            tool_outputs=tool_outputs,
+        )
+        if output_name_for_tool_lookup is None:
+            continue
 
         dataset_object = getattr(dataset, "dataset", None)
         dataset_id = getattr(dataset_object, "id", None)
         if not isinstance(dataset_id, int):
             continue
 
-        base_ext = cast(str, getattr(dataset, "ext", "") or "")
-        if not base_ext:
-            continue
-        if base_ext.endswith(".c4gh"):
-            continue
-
-        if base_ext in ("auto", "data", "_sniff_"):
-            tool_output = tool_outputs.get(output_name_for_tool_lookup)
-            declared_ext = getattr(tool_output, "format", None) if tool_output else None
-            if declared_ext and declared_ext not in ("auto", "data", "_sniff_", "input"):
-                base_ext = declared_ext
-            else:
-                continue
-
-        encrypted_ext = f"{base_ext}.c4gh"
-        if datatypes_registry.get_datatype_by_extension(encrypted_ext) is None:
-            datatypes_registry.get_or_create_crypt4gh_datatype(base_ext)
-
         tool_output = tool_outputs.get(output_name_for_tool_lookup)
-        from_work_dir = getattr(tool_output, "from_work_dir", None) if tool_output else None
-        if from_work_dir:
-            from_work_dir_path = Path(str(from_work_dir))
-            output_path = str(
-                from_work_dir_path if from_work_dir_path.is_absolute() else tool_working_directory / from_work_dir_path
-            )
-        else:
-            output_path = (
-                getattr(dataset_path, "false_path", None)
-                or getattr(dataset_path, "real_path", None)
-                or str(dataset_path)
-            )
+        base_ext = _resolve_base_output_extension(dataset=dataset, tool_output=tool_output)
+        if base_ext is None:
+            continue
+
+        encrypted_ext = _ensure_crypt4gh_output_datatype(
+            datatypes_registry=datatypes_registry,
+            base_ext=base_ext,
+        )
+        output_path = _resolve_output_path(
+            dataset_path=dataset_path,
+            tool_output=tool_output,
+            tool_working_directory=tool_working_directory,
+        )
 
         target = _DeclaredCrypt4GHOutputTarget(
-            output_path=str(output_path),
+            output_path=output_path,
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
             encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
             encrypted_ext=encrypted_ext,
         )
-        targets.append(
-            {
-                "output_path": target.output_path,
-                "plaintext_path": target.plaintext_path,
-                "encrypted_marker_path": target.encrypted_marker_path,
-                "encrypted_ext": target.encrypted_ext,
-            }
-        )
+        targets.append(_declared_output_target_to_mapping(target))
 
         if output_name.startswith("__new_primary_file_"):
             continue
 
-        dataset_collectors = list(getattr(tool_output, "dataset_collector_descriptions", [])) if tool_output else []
-        for collector in dataset_collectors:
-            if getattr(collector, "discover_via", None) != "pattern":
-                continue
-
-            collector_directory = Path(str(getattr(collector, "directory", "") or ""))
-            if collector_directory.is_absolute():
-                discover_directory = str(collector_directory)
-            else:
-                discover_directory = str(tool_working_directory / collector_directory)
-            targets.append(
-                {
-                    "discover_pattern": str(getattr(collector, "pattern", "")),
-                    "discover_directory": discover_directory,
-                    "assign_primary_output": bool(getattr(collector, "assign_primary_output", False)),
-                    "primary_encrypted_marker_path": str(marker_dir / f"ds_{dataset_id}.encrypted"),
-                    "marker_dir": str(marker_dir),
-                    "discovered_plaintext_root": str(plaintext_root / "discovered"),
-                    "encrypted_ext": encrypted_ext,
-                }
+        targets.extend(
+            _collect_discovered_output_targets(
+                tool_output=tool_output,
+                tool_working_directory=tool_working_directory,
+                marker_dir=marker_dir,
+                dataset_id=dataset_id,
+                plaintext_root=plaintext_root,
+                encrypted_ext=encrypted_ext,
             )
+        )
 
     return targets
+
+
+def _resolve_output_name_for_tool_lookup(*, output_name: str, tool_outputs: Mapping[str, Any]) -> Optional[str]:
+    if output_name in tool_outputs:
+        return output_name
+    if output_name.startswith("__new_primary_file_"):
+        return output_name[len("__new_primary_file_") :].split("|", 1)[0]
+    return None
+
+
+def _resolve_base_output_extension(*, dataset: Any, tool_output: Any) -> Optional[str]:
+    base_ext = cast(str, getattr(dataset, "ext", "") or "")
+    if not base_ext or base_ext.endswith(".c4gh"):
+        return None
+
+    if base_ext in ("auto", "data", "_sniff_"):
+        declared_ext = getattr(tool_output, "format", None) if tool_output else None
+        if declared_ext and declared_ext not in ("auto", "data", "_sniff_", "input"):
+            return cast(str, declared_ext)
+        return None
+    return base_ext
+
+
+def _ensure_crypt4gh_output_datatype(*, datatypes_registry: Any, base_ext: str) -> str:
+    encrypted_ext = f"{base_ext}.c4gh"
+    if datatypes_registry.get_datatype_by_extension(encrypted_ext) is None:
+        datatypes_registry.get_or_create_crypt4gh_datatype(base_ext)
+    return encrypted_ext
+
+
+def _resolve_output_path(*, dataset_path: Any, tool_output: Any, tool_working_directory: Path) -> str:
+    from_work_dir = getattr(tool_output, "from_work_dir", None) if tool_output else None
+    if from_work_dir:
+        from_work_dir_path = Path(str(from_work_dir))
+        if from_work_dir_path.is_absolute():
+            return str(from_work_dir_path)
+        return str(tool_working_directory / from_work_dir_path)
+    return cast(
+        str,
+        getattr(dataset_path, "false_path", None)
+        or getattr(dataset_path, "real_path", None)
+        or str(dataset_path),
+    )
+
+
+def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, str]:
+    return {
+        "output_path": target.output_path,
+        "plaintext_path": target.plaintext_path,
+        "encrypted_marker_path": target.encrypted_marker_path,
+        "encrypted_ext": target.encrypted_ext,
+    }
+
+
+def _collect_discovered_output_targets(
+    *,
+    tool_output: Any,
+    tool_working_directory: Path,
+    marker_dir: Path,
+    dataset_id: int,
+    plaintext_root: Path,
+    encrypted_ext: str,
+) -> list[dict[str, Any]]:
+    discovered_targets: list[dict[str, Any]] = []
+    dataset_collectors = list(getattr(tool_output, "dataset_collector_descriptions", [])) if tool_output else []
+    for collector in dataset_collectors:
+        if getattr(collector, "discover_via", None) != "pattern":
+            continue
+
+        collector_directory = Path(str(getattr(collector, "directory", "") or ""))
+        discover_directory = (
+            str(collector_directory) if collector_directory.is_absolute() else str(tool_working_directory / collector_directory)
+        )
+        discovered_targets.append(
+            {
+                "discover_pattern": str(getattr(collector, "pattern", "")),
+                "discover_directory": discover_directory,
+                "assign_primary_output": bool(getattr(collector, "assign_primary_output", False)),
+                "primary_encrypted_marker_path": str(marker_dir / f"ds_{dataset_id}.encrypted"),
+                "marker_dir": str(marker_dir),
+                "discovered_plaintext_root": str(plaintext_root / "discovered"),
+                "encrypted_ext": encrypted_ext,
+            }
+        )
+    return discovered_targets
 
 
 def finalize_declared_crypt4gh_outputs(
@@ -505,6 +606,8 @@ def finalize_declared_crypt4gh_outputs(
     compute_keypair_expiration_date: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> None:
+    """Encrypt declared outputs to user keys and persist extension markers."""
+
     current_time = now or datetime.now(timezone.utc)
     if compute_keypair_expiration_date:
         _assert_key_valid_for_output_finalization(
@@ -512,7 +615,21 @@ def finalize_declared_crypt4gh_outputs(
             now=current_time,
         )
 
+    for concrete_target, output_path in _iter_unique_existing_output_targets(output_targets):
+        _finalize_output_target(
+            concrete_target=concrete_target,
+            output_path=output_path,
+            reencryption_service_url=reencryption_service_url,
+            compute_public_key=compute_public_key,
+            compute_keypair_id=compute_keypair_id,
+        )
+
+
+def _iter_unique_existing_output_targets(
+    output_targets: Sequence[Mapping[str, Any]],
+) -> list[tuple[dict[str, str], Path]]:
     encrypted_paths: set[str] = set()
+    resolved_targets: list[tuple[dict[str, str], Path]] = []
     for target in output_targets:
         for concrete_target in _resolve_output_targets(target):
             output_path = Path(concrete_target["output_path"])
@@ -524,49 +641,64 @@ def finalize_declared_crypt4gh_outputs(
                 continue
 
             encrypted_paths.add(output_path_key)
+            resolved_targets.append((concrete_target, output_path))
+    return resolved_targets
 
-            plaintext_path = Path(concrete_target["plaintext_path"])
-            plaintext_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(output_path, plaintext_path)
 
-            compute_encrypted_path = Path(f"{output_path}.compute.c4gh")
-            final_tmp_path = Path(f"{output_path}.c4gh.tmp")
-            try:
-                _encrypt_plaintext_to_compute_key(
-                    plaintext_path=plaintext_path,
-                    compute_encrypted_path=compute_encrypted_path,
-                    compute_public_key=compute_public_key,
-                )
-                _rewrite_output_header_to_user_key(
-                    compute_encrypted_path=compute_encrypted_path,
-                    final_output_tmp_path=final_tmp_path,
-                    reencryption_service_url=reencryption_service_url,
-                    compute_keypair_id=compute_keypair_id,
-                )
-                os.replace(final_tmp_path, output_path)
+def _finalize_output_target(
+    *,
+    concrete_target: Mapping[str, str],
+    output_path: Path,
+    reencryption_service_url: str,
+    compute_public_key: str,
+    compute_keypair_id: str,
+) -> None:
+    plaintext_path = Path(concrete_target["plaintext_path"])
+    plaintext_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(output_path, plaintext_path)
 
-                marker_path_value = concrete_target.get("encrypted_marker_path")
-                if marker_path_value:
-                    marker_path = Path(marker_path_value)
-                    marker_path.parent.mkdir(parents=True, exist_ok=True)
-                    marker_path.write_text(f"{concrete_target['encrypted_ext']}\n")
-                designation = str(concrete_target.get("designation", "") or "")
-                discovered_marker_map_path = str(concrete_target.get("discovered_marker_map_path", "") or "")
-                if designation and discovered_marker_map_path:
-                    _write_discovered_designation_marker(
-                        marker_map_path=Path(discovered_marker_map_path),
-                        designation=designation,
-                        encrypted_ext=concrete_target["encrypted_ext"],
-                    )
-            except Exception as exc:
-                raise Crypt4GHRemoteExecutionError(
-                    f"Failed to finalize encrypted Crypt4GH output at {output_path}: {exc}"
-                ) from exc
-            finally:
-                if compute_encrypted_path.exists():
-                    compute_encrypted_path.unlink()
-                if final_tmp_path.exists():
-                    final_tmp_path.unlink()
+    compute_encrypted_path = Path(f"{output_path}.compute.c4gh")
+    final_tmp_path = Path(f"{output_path}.c4gh.tmp")
+    try:
+        _encrypt_plaintext_to_compute_key(
+            plaintext_path=plaintext_path,
+            compute_encrypted_path=compute_encrypted_path,
+            compute_public_key=compute_public_key,
+        )
+        _rewrite_output_header_to_user_key(
+            compute_encrypted_path=compute_encrypted_path,
+            final_output_tmp_path=final_tmp_path,
+            reencryption_service_url=reencryption_service_url,
+            compute_keypair_id=compute_keypair_id,
+        )
+        os.replace(final_tmp_path, output_path)
+        _write_output_markers(concrete_target)
+    except Exception as exc:
+        raise Crypt4GHRemoteExecutionError(
+            f"Failed to finalize encrypted Crypt4GH output at {output_path}: {exc}"
+        ) from exc
+    finally:
+        if compute_encrypted_path.exists():
+            compute_encrypted_path.unlink()
+        if final_tmp_path.exists():
+            final_tmp_path.unlink()
+
+
+def _write_output_markers(concrete_target: Mapping[str, str]) -> None:
+    marker_path_value = concrete_target.get("encrypted_marker_path")
+    if marker_path_value:
+        marker_path = Path(marker_path_value)
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(f"{concrete_target['encrypted_ext']}\n")
+
+    designation = str(concrete_target.get("designation", "") or "")
+    discovered_marker_map_path = str(concrete_target.get("discovered_marker_map_path", "") or "")
+    if designation and discovered_marker_map_path:
+        _write_discovered_designation_marker(
+            marker_map_path=Path(discovered_marker_map_path),
+            designation=designation,
+            encrypted_ext=concrete_target["encrypted_ext"],
+        )
 
 
 def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, str]]:
@@ -651,45 +783,56 @@ def _write_discovered_designation_marker(*, marker_map_path: Path, designation: 
 def build_crypt4gh_cleanup_wrapped_command(
     *, tool_command: str, cleanup_command: str, postrun_command: str = ""
 ) -> str:
+    """Wrap tool command with postrun and cleanup steps that preserve failures."""
+
     postrun_command = postrun_command.strip()
     cleanup_command = cleanup_command.strip()
     if not cleanup_command:
         if not postrun_command:
             return tool_command
-        return "\n".join(
-            [
-                "if (",
-                tool_command,
-                "); then",
-                "    _CRYPT4GH_TOOL_EXIT=0",
-                "else",
-                "    _CRYPT4GH_TOOL_EXIT=$?",
-                "fi",
-                "if [ $_CRYPT4GH_TOOL_EXIT -eq 0 ]; then",
-                "    if (",
-                postrun_command,
-                "    ); then",
-                "        _CRYPT4GH_POSTRUN_EXIT=0",
-                "    else",
-                "        _CRYPT4GH_POSTRUN_EXIT=$?",
-                "    fi",
-                "else",
-                "    _CRYPT4GH_POSTRUN_EXIT=0",
-                "fi",
-                "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
-                "    exit $_CRYPT4GH_TOOL_EXIT",
-                "fi",
-                "if [ $_CRYPT4GH_POSTRUN_EXIT -ne 0 ]; then",
-                "    exit $_CRYPT4GH_POSTRUN_EXIT",
-                "fi",
-            ]
+        lines = _build_tool_and_postrun_shell_lines(
+            tool_command=tool_command,
+            postrun_command=postrun_command,
+            include_exit_checks=True,
         )
+        return "\n".join(lines)
 
+    lines = _build_tool_and_postrun_shell_lines(
+        tool_command=tool_command,
+        postrun_command=postrun_command,
+        include_exit_checks=False,
+    )
     marker_line = (
         f"    echo '{CRYPT4GH_CLEANUP_FAILED_MARKER}: cleanup failed with exit code "
         "${_CRYPT4GH_CLEANUP_EXIT}' >&2"
     )
+    lines.extend(
+        [
+            "if (",
+            cleanup_command,
+            "); then",
+            "    _CRYPT4GH_CLEANUP_EXIT=0",
+            "else",
+            "    _CRYPT4GH_CLEANUP_EXIT=$?",
+            marker_line,
+            "fi",
+            "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
+            "    exit $_CRYPT4GH_TOOL_EXIT",
+            "fi",
+            "if [ $_CRYPT4GH_POSTRUN_EXIT -ne 0 ]; then",
+            "    exit $_CRYPT4GH_POSTRUN_EXIT",
+            "fi",
+            "if [ $_CRYPT4GH_CLEANUP_EXIT -ne 0 ]; then",
+            "    exit $_CRYPT4GH_CLEANUP_EXIT",
+            "fi",
+        ]
+    )
+    return "\n".join(lines)
 
+
+def _build_tool_and_postrun_shell_lines(
+    *, tool_command: str, postrun_command: str, include_exit_checks: bool
+) -> list[str]:
     lines = [
         "if (",
         tool_command,
@@ -716,29 +859,20 @@ def build_crypt4gh_cleanup_wrapped_command(
             ]
         )
     else:
-        lines.extend(["_CRYPT4GH_POSTRUN_EXIT=0"])
-    lines.extend(
-        [
-        "if (",
-        cleanup_command,
-        "); then",
-        "    _CRYPT4GH_CLEANUP_EXIT=0",
-        "else",
-        "    _CRYPT4GH_CLEANUP_EXIT=$?",
-        marker_line,
-        "fi",
-        "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
-        "    exit $_CRYPT4GH_TOOL_EXIT",
-        "fi",
-        "if [ $_CRYPT4GH_POSTRUN_EXIT -ne 0 ]; then",
-        "    exit $_CRYPT4GH_POSTRUN_EXIT",
-        "fi",
-        "if [ $_CRYPT4GH_CLEANUP_EXIT -ne 0 ]; then",
-        "    exit $_CRYPT4GH_CLEANUP_EXIT",
-        "fi",
-    ]
-    )
-    return "\n".join(lines)
+        lines.append("_CRYPT4GH_POSTRUN_EXIT=0")
+
+    if include_exit_checks:
+        lines.extend(
+            [
+                "if [ $_CRYPT4GH_TOOL_EXIT -ne 0 ]; then",
+                "    exit $_CRYPT4GH_TOOL_EXIT",
+                "fi",
+                "if [ $_CRYPT4GH_POSTRUN_EXIT -ne 0 ]; then",
+                "    exit $_CRYPT4GH_POSTRUN_EXIT",
+                "fi",
+            ]
+        )
+    return lines
 
 
 def _encrypt_plaintext_to_compute_key(
