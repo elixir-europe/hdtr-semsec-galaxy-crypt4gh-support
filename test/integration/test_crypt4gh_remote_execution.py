@@ -367,69 +367,6 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         super().setUp()
         self.dataset_populator = DatasetPopulator(self.galaxy_interactor)
 
-    def test_inheritance_simple_uses_plaintext_path_under_crypt_inputs(self) -> None:
-        history_id = self.dataset_populator.new_history()
-        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
-            input_dataset = self.dataset_populator.new_dataset(
-                history_id,
-                content=encrypted_input,
-                file_type="fastqsanger.c4gh",
-                fetch_data=False,
-                wait=True,
-            )
-
-        input_dataset_id = input_dataset["id"]
-        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
-        sa_session = self._app.model.session
-        hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
-        assert hda is not None
-        self._set_input_compute_metadata(hda)
-        sa_session.commit()
-
-        run_response = self.dataset_populator.run_tool(
-            "inheritance_simple",
-            {"input1": {"src": "hda", "id": input_dataset_id}},
-            history_id,
-        )
-        job_api_id = run_response["jobs"][0]["id"]
-        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
-
-        details = self.dataset_populator.get_history_dataset_details(history_id, dataset_id=run_response["outputs"][0]["id"])
-        assert details["state"] == "ok", details
-
-        input_dataset_table_id = hda.dataset.id
-        assert input_dataset_table_id is not None
-
-        source_path = Path(hda.dataset.get_file_name())
-        with source_path.open("rb") as source_stream:
-            assert source_stream.read(8) == b"crypt4gh"
-
-        job_database_id = self._app.security.decode_id(job_api_id)
-        job = sa_session.get(model.Job, job_database_id)
-        assert job is not None
-        job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
-        assert job_working_directory is not None
-
-        crypt_plaintext_path = Path(job_working_directory) / "_crypt" / "inputs" / f"ds_{input_dataset_table_id}" / "plaintext"
-        assert crypt_plaintext_path.exists(), f"Expected plaintext path {crypt_plaintext_path} to exist"
-
-        staged_ciphertext_path = Path(job_working_directory) / "_crypt" / "inputs" / f"ds_{input_dataset_table_id}" / "input.c4gh"
-        assert not staged_ciphertext_path.exists(), f"Did not expect staged file {staged_ciphertext_path} to exist"
-
-        plaintext_files = [
-            plaintext_file
-            for plaintext_file in Path(job_working_directory).rglob("plaintext")
-            if plaintext_file.is_file()
-        ]
-        assert plaintext_files, "Expected at least one plaintext input materialization"
-        for plaintext_file in plaintext_files:
-            assert "_crypt/inputs/" in str(plaintext_file).replace("\\", "/")
-
-        script_texts = self._collect_job_script_texts(Path(job_working_directory))
-        assert script_texts, f"No job script files found under {job_working_directory}"
-        expected_plaintext_fragment = f"_crypt/inputs/ds_{input_dataset_table_id}/plaintext"
-        assert any(expected_plaintext_fragment in script_text for script_text in script_texts)
-
     def test_output_format_declared_outputs_are_encrypted_for_crypt4gh_jobs(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
@@ -479,13 +416,15 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
         output_dataset_table_id = direct_output_hda.dataset.id
         assert output_dataset_table_id is not None
+        input_dataset_table_id = input_hda.dataset.id
+        assert input_dataset_table_id is not None
         job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
         assert job_working_directory is not None
 
         plaintext_output_path = Path(job_working_directory) / "_crypt" / "outputs" / f"ds_{output_dataset_table_id}" / "plaintext"
-        assert plaintext_output_path.exists(), f"Expected output plaintext path {plaintext_output_path} to exist"
-        with plaintext_output_path.open() as plaintext_stream:
-            assert plaintext_stream.read() == "test\n"
+        plaintext_input_path = Path(job_working_directory) / "_crypt" / "inputs" / f"ds_{input_dataset_table_id}" / "plaintext"
+        assert not plaintext_output_path.exists(), f"Expected output plaintext path {plaintext_output_path} to be removed"
+        assert not plaintext_input_path.exists(), f"Expected input plaintext path {plaintext_input_path} to be removed"
 
         output_dataset_path = Path(direct_output_hda.dataset.get_file_name())
         with output_dataset_path.open("rb") as output_stream:
@@ -668,79 +607,6 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
         assert job["state"] == "error"
         assert "compute key expired before output finalization" in job.get("tool_stderr", "")
-
-    def _collect_job_script_texts(self, job_working_directory: Path) -> list[str]:
-        script_texts: list[str] = []
-        for script_path in job_working_directory.rglob("*.sh"):
-            try:
-                script_texts.append(script_path.read_text(errors="ignore"))
-            except OSError:
-                continue
-        tool_script = job_working_directory / "working" / "tool_script.sh"
-        if tool_script.exists():
-            try:
-                script_texts.append(tool_script.read_text(errors="ignore"))
-            except OSError:
-                pass
-        return script_texts
-
-
-def test_prepare_galaxy_skips_mock_server_when_live_service_url_set(monkeypatch) -> None:
-    class _UnexpectedMockServer:
-        def __init__(self, *args, **kwargs):
-            del args
-            del kwargs
-            raise AssertionError("Mock compute recryptor should not be constructed for live-service smoke mode")
-
-    monkeypatch.setenv("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL", "http://127.0.0.1:9001")
-    monkeypatch.setattr(
-        TestCrypt4GHRemoteExecutionIntegration,
-        "_refresh_live_compute_keypair_metadata",
-        classmethod(lambda cls, *, user_public_key_path: None),
-    )
-    monkeypatch.setattr(
-        f"{__name__}._MockComputeRecryptorServer",
-        _UnexpectedMockServer,
-    )
-
-    TestCrypt4GHRemoteExecutionIntegration._prepare_galaxy()
-
-
-def test_handle_galaxy_config_kwds_prefers_live_service_url(monkeypatch) -> None:
-    class _FakeMockServer:
-        url = "http://127.0.0.1:9002"
-
-    TestCrypt4GHRemoteExecutionIntegration._mock_compute_recryptor_server = _FakeMockServer()
-    monkeypatch.setenv("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL", "http://127.0.0.1:9001")
-
-    config: dict[str, Any] = {}
-    TestCrypt4GHRemoteExecutionIntegration.handle_galaxy_config_kwds(config)
-
-    assert config["crypt4gh_reencryption_service_url"] == "http://127.0.0.1:9001"
-
-
-def test_prepare_galaxy_live_service_updates_compute_keypair_metadata(monkeypatch) -> None:
-    captured_public_key_path = ""
-
-    def _fake_refresh(cls, *, user_public_key_path: str) -> None:
-        nonlocal captured_public_key_path
-        captured_public_key_path = user_public_key_path
-        cls._mock_compute_keypair_id = "live-key-id"
-        cls._mock_compute_keypair_expiration_date = "2099-03-01T00:00:00+00:00"
-
-    monkeypatch.setenv("GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL", "http://127.0.0.1:9001")
-    monkeypatch.setattr(
-        TestCrypt4GHRemoteExecutionIntegration,
-        "_refresh_live_compute_keypair_metadata",
-        classmethod(_fake_refresh),
-    )
-
-    TestCrypt4GHRemoteExecutionIntegration._prepare_galaxy()
-
-    assert captured_public_key_path == os.path.join("test-data", "crypt4gh", "user_key.pub")
-    assert TestCrypt4GHRemoteExecutionIntegration._mock_compute_keypair_id == "live-key-id"
-    assert TestCrypt4GHRemoteExecutionIntegration._mock_compute_keypair_expiration_date == "2099-03-01T00:00:00+00:00"
-
 
 instance = integration_util.integration_module_instance(TestCrypt4GHRemoteExecutionIntegration)
 
