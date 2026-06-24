@@ -36,7 +36,7 @@ from galaxy import model  # type: ignore[import-not-found]
 from galaxy_test.base.populators import DatasetPopulator  # type: ignore[import-not-found]
 from galaxy_test.driver import integration_util  # type: ignore[import-not-found]
 
-from galaxy.tools.crypt4gh_remote_execution import CRYPT4GH_CLEANUP_FAILED_MARKER
+from galaxy.tools.crypt4gh_remote_execution import CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER
 
 
 class _RecryptToJobKeyRequest(BaseModel):
@@ -435,7 +435,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert direct_output_hda.metadata.crypt4gh_compute_keypair_id == ""
         assert direct_output_hda.metadata.crypt4gh_compute_keypair_expiration_date == ""
 
-    def test_cleanup_failure_marks_job_error_and_emits_operator_attention_marker(self) -> None:
+    def test_finalization_failure_marks_job_error_without_plaintext_cleanup_marker(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
             input_dataset = self.dataset_populator.new_dataset(
@@ -473,7 +473,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
         assert job["state"] == "error"
         tool_stderr = job.get("tool_stderr", "")
-        assert CRYPT4GH_CLEANUP_FAILED_MARKER in tool_stderr
+        assert CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER not in tool_stderr
         assert "Compute-side recryptor B returned HTTP 500" in tool_stderr
 
     def test_discovered_dataset_outputs_are_encrypted_for_crypt4gh_jobs(self) -> None:

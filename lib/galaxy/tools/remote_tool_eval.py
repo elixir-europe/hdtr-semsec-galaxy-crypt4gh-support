@@ -35,7 +35,7 @@ from galaxy.tools.crypt4gh_remote_execution import (
     build_crypt4gh_remote_compute_environment,
     cleanup_crypt4gh_plaintext_artifacts,
     collect_declared_crypt4gh_output_targets,
-    CRYPT4GH_CLEANUP_FAILED_MARKER,
+    CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER,
     should_run_crypt4gh_remote_execution,
 )
 from galaxy.tools.data import (
@@ -324,7 +324,7 @@ if __name__ == "__main__":
             cleanup_crypt4gh_plaintext_artifacts(working_directory=WORKING_DIRECTORY)
         except Exception as cleanup_exc:
             cleanup_warning = (
-                f"\n{CRYPT4GH_CLEANUP_FAILED_MARKER}: cleanup failed before tool script finalization: {cleanup_exc}\n"
+                f"\n{CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER}: cleanup failed before tool script finalization: {cleanup_exc}\n"
             )
         traceback_text = f"{traceback_text}{cleanup_warning}"
         _persist_failure_outputs(

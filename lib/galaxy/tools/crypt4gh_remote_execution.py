@@ -52,7 +52,7 @@ class Crypt4GHRemoteExecutionError(Exception):
     """Raised when execution-side Crypt4GH setup must fail closed."""
 
 
-CRYPT4GH_CLEANUP_FAILED_MARKER = "CRYPT4GH_CLEANUP_FAILED"
+CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER = "CRYPT4GH_PLAINTEXT_CLEANUP_FAILED"
 _DEFAULT_MINIMUM_TTL = timedelta(days=1)
 _DESTINATION_WALLTIME_BUFFER = timedelta(hours=1)
 
@@ -803,7 +803,7 @@ def build_crypt4gh_cleanup_wrapped_command(
         include_exit_checks=False,
     )
     marker_line = (
-        f"    echo '{CRYPT4GH_CLEANUP_FAILED_MARKER}: cleanup failed with exit code "
+        f"    echo '{CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER}: cleanup failed with exit code "
         "${_CRYPT4GH_CLEANUP_EXIT}' >&2"
     )
     lines.extend(

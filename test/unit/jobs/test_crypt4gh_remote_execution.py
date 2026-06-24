@@ -13,7 +13,7 @@ from galaxy.tools.crypt4gh_remote_execution import (
     build_crypt4gh_remote_compute_environment,
     build_crypt4gh_cleanup_wrapped_command,
     collect_declared_crypt4gh_output_targets,
-    CRYPT4GH_CLEANUP_FAILED_MARKER,
+    CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER,
     Crypt4GHRemoteExecutionError,
     finalize_declared_crypt4gh_outputs,
     should_run_crypt4gh_remote_execution,
@@ -143,7 +143,7 @@ def test_cleanup_wrapper_runs_after_tool_failure_and_preserves_diagnostics(tmp_p
     assert cleanup_marker.exists()
     assert "ORIGINAL_TOOL_EXCEPTION" in completed.stderr
     assert "CLEANUP_EXCEPTION" in completed.stderr
-    assert CRYPT4GH_CLEANUP_FAILED_MARKER in completed.stderr
+    assert CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER in completed.stderr
 
 
 def test_cleanup_wrapper_reports_postrun_errors_without_cleanup_failure_marker(tmp_path):
@@ -162,7 +162,7 @@ def test_cleanup_wrapper_reports_postrun_errors_without_cleanup_failure_marker(t
     assert completed.returncode == 1
     assert cleanup_marker.exists()
     assert "POSTRUN_EXCEPTION" in completed.stderr
-    assert CRYPT4GH_CLEANUP_FAILED_MARKER not in completed.stderr
+    assert CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER not in completed.stderr
 
 
 def test_local_minimum_ttl_gate_runs_before_any_recrypt_b_call(monkeypatch):
