@@ -30,12 +30,16 @@ Open a **dedicated terminal** and leave it running:
 ```bash
 python - << 'EOF'
 import sys, time
-sys.path.insert(0, 'test/unit/jobs')
-from mock_recryptor_service import MockRecryptorServer
+sys.path.insert(0, 'test/integration')
+from test_crypt4gh_remote_execution import _MockComputeRecryptorServer
 
-srv = MockRecryptorServer(
+srv = _MockComputeRecryptorServer(
     user_private_key_path='test-data/crypt4gh/user_key.sec',
+    user_public_key_path='test-data/crypt4gh/user_key.pub',
+    compute_private_key_path='test-data/crypt4gh/compute_key.sec',
     compute_public_key_path='test-data/crypt4gh/compute_key.pub',
+    compute_keypair_id='manual-test-compute-key-1',
+    compute_keypair_expiration_date='2099-01-01T00:00:00+00:00',
 )
 srv.start()
 print(f"\nRe-encryptor running at: {srv.url}\n")
@@ -215,5 +219,5 @@ dataset disappears from tool inputs:
 | `test-data/crypt4gh/compute_key.sec`       | Compute test private key used by mock compute-side service      |
 | `test-data/crypt4gh/compute_key.pub`       | Compute test public key used by mock compute-side service       |
 | `test-data/crypt4gh/test.fastqsanger.c4gh` | Test FASTQ encrypted with `user_key.pub`                        |
-| `test/unit/jobs/mock_recryptor_service.py` | Mock compute-side recryptor service (FastAPI + uvicorn)         |
+| `test/integration/test_crypt4gh_remote_execution.py` | Mock compute-side recryptor service (`_MockComputeRecryptorServer`) |
 | `lib/galaxy/tools/crypt4gh_remote_execution.py` | Execution-side `_crypt/` staging/finalization logic       |
