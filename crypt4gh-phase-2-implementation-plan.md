@@ -221,7 +221,7 @@ Minimum verification commands for the finished slice:
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
 - [ ] Extend unit tests so cleanup must still run after tool failure and the surfaced failure text still includes the original tool exception.
-- [ ] Extend unit and/or integration tests so cleanup failure has a concrete observable contract: the final job state is failed/error via `job_wrapper.fail(...)`, the failure text or captured log includes a fixed marker such as `CRYPT4GH_CLEANUP_FAILED`, and the surfaced diagnostics include both the original tool failure (if any) and the cleanup exception.
+- [ ] Extend unit and/or integration tests so cleanup failure has a concrete observable contract: the final job state is failed/error via `job_wrapper.fail(...)`, the failure text or captured log includes a fixed marker such as `CRYPT4GH_PLAINTEXT_CLEANUP_FAILED`, and the surfaced diagnostics include both the original tool failure (if any) and the cleanup exception.
 - [ ] Run: `pytest test/unit/jobs/test_crypt4gh_remote_execution.py -k cleanup -q`
   Expected: FAIL with missing cleanup-on-failure, fixed-marker, or combined-diagnostics assertions.
 - [ ] Implement cleanup in a reliable post-run path that executes after both successful and failed tool runs.

@@ -133,6 +133,6 @@ Non-blocking follow-up ideas (optional):
    - Force a short/expired compute key TTL and verify the job fails closed with the expected TTL/expiration error text.
 
 6. **Cleanup failure marker behavior**
-   - Trigger a forced `/recrypt_header_to_user_key` failure path and verify `CRYPT4GH_CLEANUP_FAILED` marker appears in tool stderr.
+   - Trigger a cleanup-path failure and verify `CRYPT4GH_PLAINTEXT_CLEANUP_FAILED` marker appears in tool stderr.
 
 For broader step-by-step UI procedure, use `test-data/crypt4gh/MANUAL_TESTING.md`.
