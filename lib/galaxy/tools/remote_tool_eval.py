@@ -1,9 +1,11 @@
 """Remote tool evaluation entrypoint with optional Crypt4GH staging/finalization."""
 
 import json
+import logging
 import os
 import shlex
 import shutil
+import sys
 import tempfile
 import traceback
 from collections.abc import Callable
@@ -46,7 +48,7 @@ from galaxy.tools.data import (
 from galaxy.util.bunch import Bunch
 
 
-log = getLogger(__name__)
+log = getLogger("galaxy.tools.remote_tool_eval")
 
 
 class ToolAppConfig(NamedTuple):
@@ -202,6 +204,14 @@ def _metadata_store_directories(*, working_directory: str) -> tuple[str, str]:
     return import_store_directory, export_store_directory
 
 
+def _configure_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
+
+
 def _persist_failure_outputs(*, working_directory: str, export_store_directory: str, traceback_text: str) -> None:
     os.makedirs(export_store_directory, exist_ok=True)
     with open(os.path.join(export_store_directory, "traceback.txt"), "w") as out:
@@ -217,6 +227,8 @@ def _persist_failure_outputs(*, working_directory: str, export_store_directory: 
 
 def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     """Render remote tool command script and persist failure diagnostics."""
+
+    _configure_logging()
 
     galaxy_lib_for_finalize = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
     metadata_params = get_metadata_params(WORKING_DIRECTORY)
