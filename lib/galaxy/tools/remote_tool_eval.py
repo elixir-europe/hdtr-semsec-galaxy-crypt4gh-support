@@ -11,6 +11,7 @@ from typing import (
     NamedTuple,
     cast,
 )
+from logging import getLogger
 
 from galaxy.datatypes.registry import Registry
 from galaxy.files import ConfiguredFileSources
@@ -43,6 +44,9 @@ from galaxy.tools.data import (
     ToolDataTableManager,
 )
 from galaxy.util.bunch import Bunch
+
+
+log = getLogger(__name__)
 
 
 class ToolAppConfig(NamedTuple):
@@ -286,6 +290,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                 datatypes_registry=app.datatypes_registry,
                 working_directory=WORKING_DIRECTORY,
             )
+            log.info(output_targets)
             if output_targets:
                 compute_public_key = getattr(compute_environment, "compute_public_key", None)
                 compute_keypair_id = getattr(compute_environment, "compute_keypair_id", None)
@@ -303,6 +308,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                     compute_keypair_id=cast(str, compute_keypair_id),
                     compute_keypair_expiration_date=compute_keypair_expiration_date,
                 )
+                log.info(f'{postrun_command=}')
         command_line = build_crypt4gh_cleanup_wrapped_command(
             tool_command=command_line or "",
             cleanup_command=cleanup_command,
