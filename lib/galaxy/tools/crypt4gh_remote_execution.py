@@ -531,8 +531,11 @@ def _resolve_output_name_for_tool_lookup(*, output_name: str, tool_outputs: Mapp
 
 def _resolve_base_output_extension(*, dataset: Any, tool_output: Any) -> Optional[str]:
     base_ext = cast(str, getattr(dataset, "ext", "") or "")
-    if not base_ext or base_ext.endswith(".c4gh"):
+    if not base_ext:
         return None
+
+    if base_ext.endswith(".c4gh"):
+        base_ext = base_ext[: -len(".c4gh")]
 
     if base_ext in ("auto", "data", "_sniff_"):
         declared_ext = getattr(tool_output, "format", None) if tool_output else None
