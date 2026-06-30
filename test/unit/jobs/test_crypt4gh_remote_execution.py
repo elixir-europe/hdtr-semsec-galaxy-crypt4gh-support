@@ -400,3 +400,242 @@ def test_collect_declared_targets_includes_new_primary_discovered_outputs(tmp_pa
     assert targets[0]["output_path"] == str(output_path)
     assert targets[0]["encrypted_ext"] == "tabular.c4gh"
     assert targets[0]["encrypted_marker_path"] == str(tmp_path / "_c4gh_stage" / "outputs" / "ds_4.encrypted")
+
+
+def test_collect_declared_targets_fails_closed_when_tool_output_lookup_is_missing(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=4)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("sample\n")
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="no matching tool output"):
+        collect_declared_crypt4gh_output_targets(
+            job_io=_OutputJobIO(str(output_path)),
+            tool_outputs={},
+            datatypes_registry=_DatatypesRegistry(),
+            working_directory=str(tmp_path),
+        )
+
+
+def test_collect_declared_targets_fails_closed_when_dataset_id_is_missing(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=None)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="missing a persisted dataset id"):
+        collect_declared_crypt4gh_output_targets(
+            job_io=_OutputJobIO(str(output_path)),
+            tool_outputs={"sample": _ToolOutput()},
+            datatypes_registry=_DatatypesRegistry(),
+            working_directory=str(tmp_path),
+        )
+
+
+def test_collect_declared_targets_fails_closed_when_base_extension_cannot_be_resolved(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=4)
+            self.ext = "auto"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "input"
+        from_work_dir = None
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="could not resolve encrypted output extension"):
+        collect_declared_crypt4gh_output_targets(
+            job_io=_OutputJobIO(str(output_path)),
+            tool_outputs={"sample": _ToolOutput()},
+            datatypes_registry=_DatatypesRegistry(),
+            working_directory=str(tmp_path),
+        )
+
+
+def test_collect_declared_targets_fails_closed_when_discovered_collector_is_not_pattern(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=4)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    class _Collector:
+        discover_via = "tool_provided_metadata"
+        directory = "outputs"
+        pattern = r".*"
+        assign_primary_output = False
+
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+        dataset_collector_descriptions = [_Collector()]
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="requires pattern-based collectors"):
+        collect_declared_crypt4gh_output_targets(
+            job_io=_OutputJobIO(str(output_path)),
+            tool_outputs={"sample": _ToolOutput()},
+            datatypes_registry=_DatatypesRegistry(),
+            working_directory=str(tmp_path),
+        )
+
+
+def test_finalize_declared_outputs_fails_closed_when_declared_output_path_is_missing(tmp_path):
+    output_path = tmp_path / "missing.dat"
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="does not exist"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(tmp_path / "marker.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+
+def test_finalize_declared_outputs_deletes_plaintext_output_when_encryption_fails(tmp_path, monkeypatch):
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("plain\n")
+
+    def _fail_encrypt(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise RuntimeError("encrypt failed")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fail_encrypt,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="Failed to finalize encrypted Crypt4GH output"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(tmp_path / "marker.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert not output_path.exists()

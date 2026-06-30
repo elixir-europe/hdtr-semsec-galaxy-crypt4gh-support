@@ -467,21 +467,23 @@ def collect_declared_crypt4gh_output_targets(
             output_name=output_name,
             tool_outputs=tool_outputs,
         )
-        log.warning(output_name_for_tool_lookup)
         if output_name_for_tool_lookup is None:
-            continue
-
+            raise Crypt4GHRemoteExecutionError(
+                f"Crypt4GH output target '{output_name}' has no matching tool output declaration"
+            )
         dataset_object = getattr(dataset, "dataset", None)
         dataset_id = getattr(dataset_object, "id", None)
-        log.warning(dataset_id)
         if not isinstance(dataset_id, int):
-            continue
+            raise Crypt4GHRemoteExecutionError(
+                f"Crypt4GH output target '{output_name}' is missing a persisted dataset id"
+            )
 
         tool_output = tool_outputs.get(output_name_for_tool_lookup)
         base_ext = _resolve_base_output_extension(dataset=dataset, tool_output=tool_output)
-        log.warning(base_ext)
         if base_ext is None:
-            continue
+            raise Crypt4GHRemoteExecutionError(
+                f"Crypt4GH output target '{output_name}' could not resolve encrypted output extension"
+            )
 
         encrypted_ext = _ensure_crypt4gh_output_datatype(
             datatypes_registry=datatypes_registry,
@@ -493,7 +495,6 @@ def collect_declared_crypt4gh_output_targets(
             tool_working_directory=tool_working_directory,
         )
 
-        log.warning(output_path)
         target = _DeclaredCrypt4GHOutputTarget(
             output_path=output_path,
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
@@ -501,7 +502,6 @@ def collect_declared_crypt4gh_output_targets(
             encrypted_ext=encrypted_ext,
         )
         targets.append(_declared_output_target_to_mapping(target))
-        log.warning(targets)
 
         if output_name.startswith("__new_primary_file_"):
             continue
@@ -516,7 +516,6 @@ def collect_declared_crypt4gh_output_targets(
                 encrypted_ext=encrypted_ext,
             )
         )
-        log.warning(targets)
 
     return targets
 
@@ -588,8 +587,11 @@ def _collect_discovered_output_targets(
     discovered_targets: list[dict[str, Any]] = []
     dataset_collectors = list(getattr(tool_output, "dataset_collector_descriptions", [])) if tool_output else []
     for collector in dataset_collectors:
-        if getattr(collector, "discover_via", None) != "pattern":
-            continue
+        discover_via = getattr(collector, "discover_via", None)
+        if discover_via != "pattern":
+            raise Crypt4GHRemoteExecutionError(
+                f"Crypt4GH output discovery requires pattern-based collectors; found discover_via={discover_via!r}"
+            )
 
         collector_directory = Path(str(getattr(collector, "directory", "") or ""))
         discover_directory = (
@@ -643,6 +645,14 @@ def _iter_unique_existing_output_targets(
     encrypted_paths: set[str] = set()
     resolved_targets: list[tuple[dict[str, str], Path]] = []
     for target in output_targets:
+        declared_output_path = target.get("output_path")
+        if declared_output_path:
+            declared_output = Path(str(declared_output_path))
+            if not declared_output.exists():
+                raise Crypt4GHRemoteExecutionError(
+                    f"Crypt4GH declared output path does not exist: {declared_output}"
+                )
+
         for concrete_target in _resolve_output_targets(target):
             output_path = Path(concrete_target["output_path"])
             if not output_path.exists():
@@ -671,6 +681,7 @@ def _finalize_output_target(
 
     compute_encrypted_path = Path(f"{output_path}.compute.c4gh")
     final_tmp_path = Path(f"{output_path}.c4gh.tmp")
+    output_replaced = False
     try:
         _encrypt_plaintext_to_compute_key(
             plaintext_path=plaintext_path,
@@ -684,8 +695,11 @@ def _finalize_output_target(
             compute_keypair_id=compute_keypair_id,
         )
         os.replace(final_tmp_path, output_path)
+        output_replaced = True
         _write_output_markers(concrete_target)
     except Exception as exc:
+        if not output_replaced and output_path.exists():
+            output_path.unlink()
         raise Crypt4GHRemoteExecutionError(
             f"Failed to finalize encrypted Crypt4GH output at {output_path}: {exc}"
         ) from exc
