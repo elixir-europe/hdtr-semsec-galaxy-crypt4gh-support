@@ -1,11 +1,9 @@
 """Remote tool evaluation entrypoint with optional Crypt4GH staging/finalization."""
 
 import json
-import logging
 import os
 import shlex
 import shutil
-import sys
 import tempfile
 import traceback
 from collections.abc import Callable
@@ -204,14 +202,6 @@ def _metadata_store_directories(*, working_directory: str) -> tuple[str, str]:
     return import_store_directory, export_store_directory
 
 
-def _configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s %(name)s %(message)s",
-        stream=sys.stderr,
-    )
-
-
 def _persist_failure_outputs(*, working_directory: str, export_store_directory: str, traceback_text: str) -> None:
     os.makedirs(export_store_directory, exist_ok=True)
     with open(os.path.join(export_store_directory, "traceback.txt"), "w") as out:
@@ -228,7 +218,7 @@ def _persist_failure_outputs(*, working_directory: str, export_store_directory: 
 def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     """Render remote tool command script and persist failure diagnostics."""
 
-    _configure_logging()
+    log.warning("remote_tool_eval: main started")
 
     galaxy_lib_for_finalize = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
     metadata_params = get_metadata_params(WORKING_DIRECTORY)
@@ -302,7 +292,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                 datatypes_registry=app.datatypes_registry,
                 working_directory=WORKING_DIRECTORY,
             )
-            log.info(output_targets)
+            log.warning(output_targets)
             if output_targets:
                 compute_public_key = getattr(compute_environment, "compute_public_key", None)
                 compute_keypair_id = getattr(compute_environment, "compute_keypair_id", None)
@@ -320,7 +310,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                     compute_keypair_id=cast(str, compute_keypair_id),
                     compute_keypair_expiration_date=compute_keypair_expiration_date,
                 )
-                log.info(f'{postrun_command=}')
+                log.warning(f'{postrun_command=}')
         command_line = build_crypt4gh_cleanup_wrapped_command(
             tool_command=command_line or "",
             cleanup_command=cleanup_command,

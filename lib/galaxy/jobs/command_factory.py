@@ -113,7 +113,10 @@ def build_command(
     # it should be preferred - at least if the directory exists.
     io_directory = "../metadata" if for_pulsar else "../outputs"
     commands_builder.capture_stdout_stderr(
-        f"{io_directory}/tool_stdout", f"{io_directory}/tool_stderr", stream_stdout_stderr=stream_stdout_stderr
+        f"{io_directory}/tool_stdout",
+        f"{io_directory}/tool_stderr",
+        stream_stdout_stderr=stream_stdout_stderr,
+        append_stdout_stderr=job_wrapper.remote_command_line,
     )
 
     # Don't need to create a separate tool working directory for Pulsar
@@ -337,9 +340,10 @@ class CommandsBuilder:
     def append_commands(self, commands):
         self.append_command("; ".join(c for c in commands if c))
 
-    def capture_stdout_stderr(self, stdout_file, stderr_file, stream_stdout_stderr=False):
+    def capture_stdout_stderr(self, stdout_file, stderr_file, stream_stdout_stderr=False, append_stdout_stderr=False):
         if not stream_stdout_stderr:
-            self.append_command(f"> '{stdout_file}' 2> '{stderr_file}'", sep="")
+            redirect = ">>" if append_stdout_stderr else ">"
+            self.append_command(f"{redirect} '{stdout_file}' 2{redirect} '{stderr_file}'", sep="")
             return
         trap_command = """trap 'rm -f "$__out" "$__err"' EXIT"""
         if TRAP_KILL_CONTAINER in self.commands:

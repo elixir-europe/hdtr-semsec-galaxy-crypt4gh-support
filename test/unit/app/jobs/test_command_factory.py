@@ -91,6 +91,11 @@ class TestCommandFactory(TestCase):
 
         assert "mkdir -p outputs; touch outputs/tool_stdout outputs/tool_stderr;" in command
         assert 'python "$GALAXY_LIB"/galaxy/tools/remote_tool_eval.py >> outputs/tool_stdout 2>> outputs/tool_stderr' in command
+        if self.stream_stdout_stderr:
+            assert "tee -a '../outputs/tool_stdout'" in command
+            assert "tee -a '../outputs/tool_stderr'" in command
+        else:
+            assert " >> '../outputs/tool_stdout' 2>> '../outputs/tool_stderr'" in command
         assert "&& ( cd working;" in command
 
     def test_workdir_outputs(self):

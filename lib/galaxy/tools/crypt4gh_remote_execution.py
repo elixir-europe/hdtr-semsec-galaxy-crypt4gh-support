@@ -467,19 +467,19 @@ def collect_declared_crypt4gh_output_targets(
             output_name=output_name,
             tool_outputs=tool_outputs,
         )
-        log.info(output_name_for_tool_lookup)
+        log.warning(output_name_for_tool_lookup)
         if output_name_for_tool_lookup is None:
             continue
 
         dataset_object = getattr(dataset, "dataset", None)
         dataset_id = getattr(dataset_object, "id", None)
-        log.info(dataset_id)
+        log.warning(dataset_id)
         if not isinstance(dataset_id, int):
             continue
 
         tool_output = tool_outputs.get(output_name_for_tool_lookup)
         base_ext = _resolve_base_output_extension(dataset=dataset, tool_output=tool_output)
-        log.info(base_ext)
+        log.warning(base_ext)
         if base_ext is None:
             continue
 
@@ -493,7 +493,7 @@ def collect_declared_crypt4gh_output_targets(
             tool_working_directory=tool_working_directory,
         )
 
-        log.info(output_path)
+        log.warning(output_path)
         target = _DeclaredCrypt4GHOutputTarget(
             output_path=output_path,
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
@@ -501,7 +501,7 @@ def collect_declared_crypt4gh_output_targets(
             encrypted_ext=encrypted_ext,
         )
         targets.append(_declared_output_target_to_mapping(target))
-        log.info(targets)
+        log.warning(targets)
 
         if output_name.startswith("__new_primary_file_"):
             continue
@@ -516,7 +516,7 @@ def collect_declared_crypt4gh_output_targets(
                 encrypted_ext=encrypted_ext,
             )
         )
-        log.info(targets)
+        log.warning(targets)
 
     return targets
 
