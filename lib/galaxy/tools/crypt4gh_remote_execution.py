@@ -110,6 +110,7 @@ class _RecryptToJobKeyResult:
 @dataclass(frozen=True)
 class _DeclaredCrypt4GHOutputTarget:
     output_path: str
+    dataset_output_path: Optional[str]
     plaintext_path: str
     encrypted_marker_path: str
     encrypted_ext: str
@@ -497,6 +498,7 @@ def collect_declared_crypt4gh_output_targets(
 
         target = _DeclaredCrypt4GHOutputTarget(
             output_path=output_path,
+            dataset_output_path=cast(Optional[str], getattr(dataset_path, "real_path", None)),
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
             encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
             encrypted_ext=encrypted_ext,
@@ -567,12 +569,15 @@ def _resolve_output_path(*, dataset_path: Any, tool_output: Any, tool_working_di
 
 
 def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, str]:
-    return {
+    mapping = {
         "output_path": target.output_path,
         "plaintext_path": target.plaintext_path,
         "encrypted_marker_path": target.encrypted_marker_path,
         "encrypted_ext": target.encrypted_ext,
     }
+    if target.dataset_output_path:
+        mapping["dataset_output_path"] = target.dataset_output_path
+    return mapping
 
 
 def _collect_discovered_output_targets(
@@ -629,14 +634,35 @@ def finalize_declared_crypt4gh_outputs(
             now=current_time,
         )
 
-    for concrete_target, output_path in _iter_unique_existing_output_targets(output_targets):
-        _finalize_output_target(
-            concrete_target=concrete_target,
-            output_path=output_path,
-            reencryption_service_url=reencryption_service_url,
-            compute_public_key=compute_public_key,
-            compute_keypair_id=compute_keypair_id,
-        )
+    resolved_targets = _iter_unique_existing_output_targets(output_targets)
+    try:
+        for concrete_target, output_path in resolved_targets:
+            _finalize_output_target(
+                concrete_target=concrete_target,
+                output_path=output_path,
+                reencryption_service_url=reencryption_service_url,
+                compute_public_key=compute_public_key,
+                compute_keypair_id=compute_keypair_id,
+            )
+    except Exception:
+        _purge_output_targets_after_finalization_failure(resolved_targets)
+        raise
+
+
+def _purge_output_targets_after_finalization_failure(
+    resolved_targets: Sequence[tuple[dict[str, str], Path]],
+) -> None:
+    for concrete_target, output_path in resolved_targets:
+        candidate_paths = [output_path]
+        dataset_output_path_value = str(concrete_target.get("dataset_output_path", "") or "")
+        if dataset_output_path_value:
+            candidate_paths.append(Path(dataset_output_path_value))
+        for candidate_path in candidate_paths:
+            try:
+                if candidate_path.exists():
+                    candidate_path.unlink()
+            except Exception:
+                log.exception("Failed to remove plaintext output candidate %s after Crypt4GH finalization failure", candidate_path)
 
 
 def _iter_unique_existing_output_targets(
@@ -678,6 +704,8 @@ def _finalize_output_target(
     plaintext_path = Path(concrete_target["plaintext_path"])
     plaintext_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(output_path, plaintext_path)
+    dataset_output_path_value = str(concrete_target.get("dataset_output_path", "") or "")
+    dataset_output_path = Path(dataset_output_path_value) if dataset_output_path_value else None
 
     compute_encrypted_path = Path(f"{output_path}.compute.c4gh")
     final_tmp_path = Path(f"{output_path}.c4gh.tmp")
@@ -700,6 +728,8 @@ def _finalize_output_target(
     except Exception as exc:
         if not output_replaced and output_path.exists():
             output_path.unlink()
+        if not output_replaced and dataset_output_path and dataset_output_path.exists():
+            dataset_output_path.unlink()
         raise Crypt4GHRemoteExecutionError(
             f"Failed to finalize encrypted Crypt4GH output at {output_path}: {exc}"
         ) from exc
@@ -730,14 +760,16 @@ def _write_output_markers(concrete_target: Mapping[str, str]) -> None:
 def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, str]]:
     output_path = target.get("output_path")
     if output_path:
-        return [
-            {
-                "output_path": str(output_path),
-                "plaintext_path": str(target["plaintext_path"]),
-                "encrypted_ext": str(target["encrypted_ext"]),
-                "encrypted_marker_path": str(target.get("encrypted_marker_path", "")),
-            }
-        ]
+        concrete_target = {
+            "output_path": str(output_path),
+            "plaintext_path": str(target["plaintext_path"]),
+            "encrypted_ext": str(target["encrypted_ext"]),
+            "encrypted_marker_path": str(target.get("encrypted_marker_path", "")),
+        }
+        dataset_output_path = target.get("dataset_output_path")
+        if dataset_output_path:
+            concrete_target["dataset_output_path"] = str(dataset_output_path)
+        return [concrete_target]
 
     discover_pattern = target.get("discover_pattern")
     if not discover_pattern:

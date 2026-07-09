@@ -639,3 +639,87 @@ def test_finalize_declared_outputs_deletes_plaintext_output_when_encryption_fail
         )
 
     assert not output_path.exists()
+
+
+def test_finalize_declared_outputs_deletes_dataset_destination_when_encryption_fails(tmp_path, monkeypatch):
+    output_path = tmp_path / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    dataset_output_path = tmp_path / "objects" / "dataset_1.dat"
+    dataset_output_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_output_path.write_text("plain\n")
+
+    def _fail_encrypt(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise RuntimeError("encrypt failed")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fail_encrypt,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="Failed to finalize encrypted Crypt4GH output"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "dataset_output_path": str(dataset_output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(tmp_path / "marker.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert not output_path.exists()
+    assert not dataset_output_path.exists()
+
+
+def test_finalize_declared_outputs_deletes_unprocessed_plaintext_outputs_when_any_target_fails(tmp_path, monkeypatch):
+    first_output_path = tmp_path / "working" / "1"
+    first_output_path.parent.mkdir(parents=True, exist_ok=True)
+    first_output_path.write_text("plain-one\n")
+
+    second_output_path = tmp_path / "working" / "2"
+    second_output_path.write_text("plain-two\n")
+
+    def _fail_first_encrypt(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_encrypted_path
+        del compute_public_key
+        if str(plaintext_path).endswith("plaintext.1"):
+            raise RuntimeError("encrypt failed")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fail_first_encrypt,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="Failed to finalize encrypted Crypt4GH output"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(first_output_path),
+                    "plaintext_path": str(tmp_path / "plaintext.1"),
+                    "encrypted_marker_path": str(tmp_path / "marker.1.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                },
+                {
+                    "output_path": str(second_output_path),
+                    "plaintext_path": str(tmp_path / "plaintext.2"),
+                    "encrypted_marker_path": str(tmp_path / "marker.2.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                },
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert not first_output_path.exists()
+    assert not second_output_path.exists()

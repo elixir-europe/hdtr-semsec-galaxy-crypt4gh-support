@@ -476,6 +476,30 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER not in tool_stderr
         assert "Compute-side recryptor B returned HTTP 500" in tool_stderr
 
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job_model = sa_session.get(model.Job, job_database_id)
+        assert job_model is not None
+        direct_output_assoc = next(output_assoc for output_assoc in job_model.output_datasets if output_assoc.name == "direct_output")
+        direct_output_hda = direct_output_assoc.dataset
+        assert direct_output_hda is not None
+        assert direct_output_hda.dataset is not None
+
+        output_dataset_file_name = direct_output_hda.dataset.get_file_name(sync_cache=False)
+        if output_dataset_file_name:
+            output_dataset_path = Path(output_dataset_file_name)
+            assert not (
+                output_dataset_path.exists()
+                and output_dataset_path.is_file()
+                and os.access(output_dataset_path, os.R_OK)
+            ), (
+                "Expected output dataset path to be absent or non-readable after "
+                f"Crypt4GH finalization failure, but found readable file at {output_dataset_path}"
+            )
+        else:
+            assert not self._app.object_store.exists(direct_output_hda.dataset), (
+                "Expected output dataset path to be absent after Crypt4GH finalization failure"
+            )
+
     def test_discovered_dataset_outputs_are_encrypted_for_crypt4gh_jobs(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
