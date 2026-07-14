@@ -2114,6 +2114,30 @@ class MinimalJobWrapper(HasResourceParameters):
                         encrypted_ext,
                     )
 
+    def _normalize_successful_output_association_states(self, job: Job, output_dataset_associations) -> None:
+        pending_states = {
+            Dataset.states.NEW,
+            Dataset.states.UPLOAD,
+            Dataset.states.QUEUED,
+            Dataset.states.RUNNING,
+        }
+
+        for dataset_assoc in output_dataset_associations:
+            dataset_instances = (
+                dataset_assoc.dataset.dataset.history_associations + dataset_assoc.dataset.dataset.library_associations
+            )
+            for dataset in dataset_instances:
+                if dataset.state not in pending_states:
+                    continue
+                dataset.state = Dataset.states.OK
+                self.sa_session.add(dataset)
+                log.debug(
+                    "(%s) Normalized output dataset association state dataset_id=%s hda_or_ldda_id=%s to ok",
+                    job.id,
+                    dataset.dataset.id if dataset.dataset else None,
+                    dataset.id,
+                )
+
     def finish(
         self,
         tool_stdout,
@@ -2288,6 +2312,11 @@ class MinimalJobWrapper(HasResourceParameters):
                     dataset_assoc.dataset.dataset.state = Dataset.states.OK
 
         if final_job_state != job.states.ERROR:
+            if extended_metadata:
+                # In extended-metadata mode, imported output-association state can
+                # remain pending from runner-side updates. Normalize those pending
+                # association states now that the job has completed successfully.
+                self._normalize_successful_output_association_states(job, output_dataset_associations)
             self._apply_crypt4gh_marked_extensions(job, output_dataset_associations)
 
         if job.states.ERROR == final_job_state:
