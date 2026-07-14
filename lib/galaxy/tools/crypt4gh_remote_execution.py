@@ -33,9 +33,13 @@ from logging import getLogger
 import crypt4gh.header
 import crypt4gh.lib
 import requests
+import truststore
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from dateutil.parser import isoparse
+from requests.adapters import HTTPAdapter
+from urllib3 import PoolManager
+
 from galaxy.job_execution.compute_environment import SharedComputeEnvironment
 
 if TYPE_CHECKING:
@@ -46,6 +50,27 @@ if TYPE_CHECKING:
     )
 
 log = getLogger(__name__)
+truststore.inject_into_ssl()
+
+class TruststoreAdapter(HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        # Force urllib3 to use truststore's native OS SSL context
+        context = truststore.SSLContext()
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            ssl_context=context,
+            **pool_kwargs
+        )
+
+# Use a session to apply the adapter
+session = requests.Session()
+session.mount("https://", TruststoreAdapter())
+
+# # This will now successfully use Ubuntu's system trust store!
+# response = session.get("https://localhost:8080")
+# print(response.status_code)
 
 class _Crypt4GHAppConfig(Protocol):
     enable_crypt4gh_transparent_staging: bool
@@ -423,7 +448,7 @@ def _recrypt_header_to_job_key(
         "crypt4gh_job_public_key": job_public_key,
     }
     try:
-        response = requests.post(endpoint, json=payload, timeout=30)
+        response = session.post(endpoint, json=payload, timeout=30)
     except requests.RequestException as exc:
         raise Crypt4GHRemoteExecutionError(
             f"Failed to contact compute-side recryptor B at {endpoint}: {exc}"
@@ -532,6 +557,7 @@ def _resolve_output_name_for_tool_lookup(*, output_name: str, tool_outputs: Mapp
 
 def _resolve_base_output_extension(*, dataset: Any, tool_output: Any) -> Optional[str]:
     base_ext = cast(str, getattr(dataset, "ext", "") or "")
+    log.warning(base_ext)
     if not base_ext:
         return None
 
@@ -988,7 +1014,7 @@ def _recrypt_header_to_user_key(
         "crypt4gh_compute_keypair_id": compute_keypair_id,
     }
     try:
-        response = requests.post(endpoint, json=payload, timeout=30)
+        response = session.post(endpoint, json=payload, timeout=30)
     except requests.RequestException as exc:
         raise Crypt4GHRemoteExecutionError(
             f"Failed to contact compute-side recryptor B at {endpoint}: {exc}"
