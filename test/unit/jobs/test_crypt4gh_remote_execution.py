@@ -269,18 +269,14 @@ def test_build_environment_uses_job_destination_walltime_before_any_recrypt_call
 def test_recrypt_http_errors_do_not_expose_raw_response_text(monkeypatch):
     raw_response_text = "TOP-SECRET\n" + ("x" * 500)
 
-    class _BadResponse:
-        ok = False
-        status_code = 500
-        text = raw_response_text
+    def _fake_post_reencryption_json(**_kwargs):
+        return crypt4gh_remote_execution._ReencryptionHttpResponse(
+            status_code=500,
+            text=raw_response_text,
+            json_payload=None,
+        )
 
-        def json(self):
-            raise ValueError("no json")
-
-    def _fake_post(*_args, **_kwargs):
-        return _BadResponse()
-
-    monkeypatch.setattr(crypt4gh_remote_execution.requests, "post", _fake_post)
+    monkeypatch.setattr(crypt4gh_remote_execution, "_post_reencryption_json", _fake_post_reencryption_json)
 
     with pytest.raises(Crypt4GHRemoteExecutionError) as exc_info:
         crypt4gh_remote_execution._recrypt_header_to_user_key(
@@ -292,6 +288,62 @@ def test_recrypt_http_errors_do_not_expose_raw_response_text(monkeypatch):
     message = str(exc_info.value)
     assert "Compute-side recryptor B returned HTTP 500" in message
     assert raw_response_text not in message
+
+
+def test_localhost_https_uses_truststore_ssl_context_when_available(monkeypatch):
+    class _FakeSSLContext:
+        pass
+
+    class _FakeTruststore:
+        @staticmethod
+        def SSLContext(*_args, **_kwargs):
+            return _FakeSSLContext()
+
+    ssl_context = crypt4gh_remote_execution._ssl_context_for_reencryption_url(
+        reencryption_service_url="https://localhost:8443",
+        truststore_module=_FakeTruststore(),
+    )
+
+    assert isinstance(ssl_context, _FakeSSLContext)
+
+
+def test_non_dev_https_url_uses_default_ssl_handling(monkeypatch):
+    class _FakeTruststore:
+        @staticmethod
+        def SSLContext():
+            raise AssertionError("Should not be called for non-dev host")
+
+    ssl_context = crypt4gh_remote_execution._ssl_context_for_reencryption_url(
+        reencryption_service_url="https://reencryptor.example.org",
+        truststore_module=_FakeTruststore(),
+    )
+
+    assert ssl_context is None
+
+
+def test_dev_https_url_without_truststore_logs_warning_and_falls_back(caplog):
+    with caplog.at_level("WARNING"):
+        ssl_context = crypt4gh_remote_execution._ssl_context_for_reencryption_url(
+            reencryption_service_url="https://reencryptor:8443",
+            truststore_module=None,
+        )
+
+    assert ssl_context is None
+    assert "truststore is unavailable" in caplog.text
+
+
+def test_http_url_does_not_attempt_truststore_even_on_dev_host():
+    class _FakeTruststore:
+        @staticmethod
+        def SSLContext():
+            raise AssertionError("Should not be called for non-https URL")
+
+    ssl_context = crypt4gh_remote_execution._ssl_context_for_reencryption_url(
+        reencryption_service_url="http://localhost:8443",
+        truststore_module=_FakeTruststore(),
+    )
+
+    assert ssl_context is None
 
 
 def test_finalize_discovered_outputs_writes_path_markers(tmp_path, monkeypatch):

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import ipaddress
 import io
 import json
 import os
 import re
 import shutil
+import ssl
 from dataclasses import dataclass
 from datetime import (
     datetime,
@@ -15,6 +18,7 @@ from datetime import (
     timezone,
 )
 from pathlib import Path
+from urllib.parse import urlsplit
 from collections.abc import (
     Mapping,
     Sequence,
@@ -32,15 +36,17 @@ from logging import getLogger
 
 import crypt4gh.header
 import crypt4gh.lib
-import requests
-import truststore
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from dateutil.parser import isoparse
-from requests.adapters import HTTPAdapter
-from urllib3 import PoolManager
+import aiohttp
 
 from galaxy.job_execution.compute_environment import SharedComputeEnvironment
+
+try:
+    import truststore as _optional_truststore
+except Exception:
+    _optional_truststore = None
 
 if TYPE_CHECKING:
     from galaxy.job_execution.setup import JobIO
@@ -50,27 +56,101 @@ if TYPE_CHECKING:
     )
 
 log = getLogger(__name__)
-truststore.inject_into_ssl()
 
-class TruststoreAdapter(HTTPAdapter):
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        # Force urllib3 to use truststore's native OS SSL context
-        context = truststore.SSLContext()
-        self.poolmanager = PoolManager(
-            num_pools=connections,
-            maxsize=maxsize,
-            block=block,
-            ssl_context=context,
-            **pool_kwargs
+
+@dataclass(frozen=True)
+class _ReencryptionHttpResponse:
+    status_code: int
+    text: str
+    json_payload: Any
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300
+
+
+def _is_dev_style_https_reencryption_url(*, reencryption_service_url: str) -> bool:
+    parsed_url = urlsplit(reencryption_service_url)
+    if parsed_url.scheme.lower() != "https":
+        return False
+
+    hostname = parsed_url.hostname
+    if not hostname:
+        return False
+
+    if hostname == "localhost":
+        return True
+
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return "." not in hostname
+
+
+def _ssl_context_for_reencryption_url(
+    *,
+    reencryption_service_url: str,
+    truststore_module: Any,
+) -> Optional[ssl.SSLContext]:
+    if not _is_dev_style_https_reencryption_url(reencryption_service_url=reencryption_service_url):
+        return None
+
+    if truststore_module is None:
+        log.warning(
+            "Crypt4GH re-encryption service URL %s matches local/dev HTTPS pattern, "
+            "but truststore is unavailable; falling back to default TLS handling",
+            reencryption_service_url,
         )
+        return None
 
-# Use a session to apply the adapter
-session = requests.Session()
-session.mount("https://", TruststoreAdapter())
+    try:
+        ssl_context = truststore_module.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        log.warning(
+            "Failed to initialize truststore SSL context for Crypt4GH re-encryption service URL %s; "
+            "falling back to default TLS handling",
+            reencryption_service_url,
+            exc_info=True,
+        )
+        return None
 
-# # This will now successfully use Ubuntu's system trust store!
-# response = session.get("https://localhost:8080")
-# print(response.status_code)
+    return ssl_context
+
+
+async def _post_reencryption_json_async(
+    *,
+    endpoint: str,
+    payload: dict[str, str],
+    ssl_context: Optional[ssl.SSLContext],
+) -> _ReencryptionHttpResponse:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as request_session:
+        async with request_session.post(endpoint, json=payload, ssl=ssl_context) as response:
+            response_text = await response.text()
+            try:
+                response_json: Any = json.loads(response_text) if response_text else None
+            except ValueError:
+                response_json = None
+
+            return _ReencryptionHttpResponse(
+                status_code=response.status,
+                text=response_text,
+                json_payload=response_json,
+            )
+
+
+def _post_reencryption_json(*, reencryption_service_url: str, endpoint: str, payload: dict[str, str]) -> _ReencryptionHttpResponse:
+    ssl_context = _ssl_context_for_reencryption_url(
+        reencryption_service_url=reencryption_service_url,
+        truststore_module=_optional_truststore,
+    )
+    return asyncio.run(
+        _post_reencryption_json_async(
+            endpoint=endpoint,
+            payload=payload,
+            ssl_context=ssl_context,
+        )
+    )
 
 class _Crypt4GHAppConfig(Protocol):
     enable_crypt4gh_transparent_staging: bool
@@ -448,8 +528,12 @@ def _recrypt_header_to_job_key(
         "crypt4gh_job_public_key": job_public_key,
     }
     try:
-        response = session.post(endpoint, json=payload, timeout=30)
-    except requests.RequestException as exc:
+        response = _post_reencryption_json(
+            reencryption_service_url=reencryption_service_url,
+            endpoint=endpoint,
+            payload=payload,
+        )
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         raise Crypt4GHRemoteExecutionError(
             f"Failed to contact compute-side recryptor B at {endpoint}: {exc}"
         ) from exc
@@ -461,7 +545,9 @@ def _recrypt_header_to_job_key(
         )
 
     try:
-        response_json = response.json()
+        response_json = response.json_payload
+        if not isinstance(response_json, dict):
+            raise ValueError("Response body is not a JSON object")
         return _RecryptToJobKeyResult(
             crypt4gh_header=cast(str, response_json["crypt4gh_header"]),
             crypt4gh_compute_public_key=cast(str, response_json["crypt4gh_compute_public_key"]),
@@ -1014,8 +1100,12 @@ def _recrypt_header_to_user_key(
         "crypt4gh_compute_keypair_id": compute_keypair_id,
     }
     try:
-        response = session.post(endpoint, json=payload, timeout=30)
-    except requests.RequestException as exc:
+        response = _post_reencryption_json(
+            reencryption_service_url=reencryption_service_url,
+            endpoint=endpoint,
+            payload=payload,
+        )
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         raise Crypt4GHRemoteExecutionError(
             f"Failed to contact compute-side recryptor B at {endpoint}: {exc}"
         ) from exc
@@ -1027,7 +1117,10 @@ def _recrypt_header_to_user_key(
         )
 
     try:
-        return cast(str, response.json()["crypt4gh_header"])
+        response_json = response.json_payload
+        if not isinstance(response_json, dict):
+            raise ValueError("Response body is not a JSON object")
+        return cast(str, response_json["crypt4gh_header"])
     except (ValueError, KeyError, TypeError) as exc:
         raise Crypt4GHRemoteExecutionError(
             "Compute-side recryptor B returned an invalid /recrypt_header_to_user_key payload"
@@ -1044,12 +1137,9 @@ def _parse_crypt4gh_public_key(public_key_pem: str) -> bytes:
         raise Crypt4GHRemoteExecutionError("Invalid CRYPT4GH public key payload") from exc
 
 
-def _summarize_http_error_response(response: requests.Response) -> str:
+def _summarize_http_error_response(response: _ReencryptionHttpResponse) -> str:
     detail: Any = None
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
+    payload = response.json_payload
 
     if isinstance(payload, dict):
         for key in ("detail", "message", "error"):
