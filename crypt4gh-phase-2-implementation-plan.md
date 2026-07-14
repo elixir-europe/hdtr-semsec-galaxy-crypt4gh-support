@@ -20,9 +20,20 @@
 - Approved implementation detail for Task 2: persist a key-id lookup index under `compute_keys/index/<shard>/<key_id>.json` (shard = first two chars of key-id suffix, e.g. `cnk:abcde1234 -> ab/cnk:abcde1234.json`) with minimal metadata (`user_hash`, `expiration`) and immediate stale-entry deletion.
 - Final encrypted outputs are indicated by existing `.c4gh` dataset semantics plus `crypt4gh_header`; no new encrypted-at-rest metadata flag in this slice.
 - `lib/galaxy/tools/remote_tool_eval.py` stays a thin entrypoint; new Crypt4GH runtime logic belongs in a dedicated helper module.
-- Selected Galaxy-imported outputs must write plaintext only under `_crypt/outputs/`; normal published/imported paths must receive only reassembled encrypted files.
-- Discovered datasets are in scope, but only after the first declared-output tracer bullet is green.
+- Runtime-controlled plaintext output staging should stay under `_crypt/outputs/` where feasible, but output-enforcement scope is defined by persisted dataset mapping rather than `_crypt/outputs/` membership alone; normal published/imported paths must receive only encrypted payloads.
+- Discovered datasets and associated `extra_files` are in scope, but only after the first declared-output tracer bullet is green.
 - Approved scope waiver for spec acceptance test 5: the user explicitly said `keep pulsar out of the plan (mention it as a follow-up)`, so Pulsar contract-reuse acceptance is deferred to follow-up work rather than required for green in this plan.
+
+## Output-enforcement alignment with the 2026-07-14 addendum
+
+- Binding addendum for this topic: `docs/superpowers/specs/2026-07-14-crypt4gh-output-enforcement-spec.md`
+- For output-enforcement semantics, the addendum is authoritative and overrides conflicting wording in this plan.
+- Superseded / no-longer-authoritative assumptions from the earlier plan text:
+  - Any wording that narrows output scope to only “selected Galaxy-imported outputs”. The required final scope is all persisted payloads for Crypt4GH jobs: declared outputs, discovered outputs, and associated `extra_files` payloads.
+  - Any discovered-output handling that relies only on Crypt4GH-specific collector or pattern-centric traversal. Required behavior must follow core persisted dataset mapping.
+  - Any success path that depends only on per-output encryption steps without a universal pre-success fail-closed verifier across persisted payload candidates.
+  - Any interpretation that `_crypt/outputs/` is a sufficient proxy for deciding which payloads must be encrypted. `_crypt/outputs/` remains a preferred staging area when runtime-controlled, but proof cases must be validated against `false_path` / `real_path` divergence and discovered-output persistence mapping.
+  - Any implicit treatment of `extra_files` as out of scope. `extra_files` payload files are in scope and require encryption plus manifest evidence.
 
 ## Repo/file map
 
@@ -69,7 +80,8 @@ Primary verification is test-first and contract-first:
 3. Galaxy integration tests define the first non-Pulsar tracer bullet with a mock/test B service.
 4. The input-compatibility tracer uses the existing `test/functional/tools/inheritance_simple.xml` tool through the integration harness.
 5. The output-finalization tracer uses the existing `test/functional/tools/output_format.xml` tool through the integration harness.
-6. Cleanup/config/doc changes are verified after behavior is green.
+6. Later integration slices must prove the addendum contract: declared + discovered persisted payload coverage, `extra_files` encryption/manifest completeness, dataset-centric selection despite path-model divergence, universal pre-success fail-closed verification, and the current plaintext allow-list for framework/control files plus `stdout/stderr`.
+7. Cleanup/config/doc changes are verified after behavior is green.
 
 Minimum verification commands for the finished slice:
 
@@ -178,7 +190,7 @@ Minimum verification commands for the finished slice:
 - [ ] Commit checkpoint in the Galaxy repo:
   `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: support crypt4gh input compatibility for existing fastq tools"`
 
-## Task 5: Declared-output encrypted return path
+## Task 5: Declared-output encrypted return path (first persisted-payload slice)
 
 **Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
@@ -188,17 +200,21 @@ Minimum verification commands for the finished slice:
 - Modify: `test/unit/data/datatypes/test_crypt4gh.py`
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
+- Note: Previous plan wording could be read as if declared outputs were the full output-enforcement scope. That reading is superseded by the 2026-07-14 addendum. This task establishes the first persisted-payload slice only; Task 7 completes the universal persisted-payload contract.
+
 - [ ] Extend the integration test so the existing `output_format` tool is loaded for the output tracer through `integration_tool_runner(["output_format"])`.
-- [ ] Extend the integration test so a declared Galaxy-imported output from `output_format` is selected for encryption once any input triggered Crypt4GH runtime handling.
-- [ ] Extend the integration test so selected plaintext output is written only under `_crypt/outputs/`.
+- [ ] Extend the integration test so a declared Galaxy-imported output from `output_format` is selected for encryption from the persisted dataset mapping once any input triggered Crypt4GH runtime handling.
+- [ ] Extend the integration test so any runtime-controlled plaintext staging for that declared output stays under `_crypt/outputs/`, while the final published/imported dataset path receives only encrypted payload content.
 - [ ] Extend unit coverage for returned-output metadata expectations: preserve `crypt4gh_header`, keep `.c4gh` semantics, and do not retain compute-key id/expiry on final returned outputs in this slice.
+- [ ] Extend the integration assertions so declared-output finalization emits payload-marker evidence that can later be consumed by the universal pre-success verifier.
 - [ ] Run: `pytest test/unit/data/datatypes/test_crypt4gh.py -q`
   Expected: FAIL with metadata expectation mismatches for returned outputs.
 - [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
   Expected: FAIL with `output_format` output-finalization assertions.
-- [ ] Implement job-level output selection for declared Galaxy-imported dataset outputs.
+- [ ] Implement job-level output selection for declared Galaxy-imported dataset outputs using core persisted dataset mapping rather than directory membership alone.
 - [ ] Implement local encryption of selected plaintext outputs to the compute public key.
 - [ ] Implement header rewrite through B and final encrypted-file reassembly on the publish/import path.
+- [ ] Implement declared-output payload-marker evidence emission for later verifier reuse.
 - [ ] Re-run: `pytest test/unit/data/datatypes/test_crypt4gh.py -q`
   Expected: PASS.
 - [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
@@ -233,32 +249,45 @@ Minimum verification commands for the finished slice:
 - [ ] Commit checkpoint in the Galaxy repo:
   `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/unit/jobs/test_crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: harden crypt4gh cleanup failure handling"`
 
-## Task 7: Discovered datasets and fail-closed expiry cases
+## Task 7: Discovered outputs, `extra_files`, and fail-closed persisted-payload verification
 
 **Worktree:** `/workspaces/dotfiles/repos/hdtr-semsec-galaxy-crypt4gh-support/work/explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
 **Files:**
 - Modify: `lib/galaxy/tools/crypt4gh_remote_execution.py`
+- Modify: `test/unit/jobs/test_crypt4gh_remote_execution.py`
 - Modify: `test/integration/test_crypt4gh_remote_execution.py`
 
 - Note: TTL guards were implemented in task 3 due to plan inconsistencies, but not thoroughly tested.
-- [ ] Extend the integration test module with discovered-dataset encryption after the declared-output slice is already green.
+- Note: Previous Task 7 wording that focused only on discovered datasets + expiry is superseded. This task now owns the remaining output-enforcement alignment work required by the 2026-07-14 addendum.
+- [ ] Extend the integration test module with discovered-output encryption after the declared-output slice is already green, including at least one non-pattern discovery path that still persists datasets.
+- [ ] Extend the integration test module with `extra_files` payload encryption and manifest-completeness assertions.
+- [ ] Extend the integration test module with a dataset-centric proof case where payload selection cannot be justified by `/outputs` membership alone (for example `false_path` vs `real_path` divergence and/or a persisted discovered payload outside `/outputs`).
+- [ ] Extend unit and/or integration coverage with a universal pre-success fail-closed verifier assertion: if any declared/discovered/`extra_files` persisted payload lacks encryption evidence, final success is blocked and the job fails with diagnostics.
+- [ ] Extend the integration test module with plaintext allow-list assertions proving framework/control artifacts stay readable while dataset payload policy remains enforced; keep `stdout/stderr` as the only current payload-adjacent plaintext exception.
 - [ ] Extend the integration test module with fail-before-launch behavior when stored TTL is below threshold.
 - [ ] Extend the integration test module with fail-closed output finalization when a key expires mid-run.
 - [ ] Add/adjust unit coverage in `test/unit/jobs/test_crypt4gh_remote_execution.py` for the local minimum-TTL launch gate:
   - local minimum-TTL gate runs before any B call
+- [ ] Add/adjust unit coverage in `test/unit/jobs/test_crypt4gh_remote_execution.py` for verifier diagnostics:
+  - missing payload-marker evidence identifies the evidence class
+  - missing `extra_files` manifest evidence identifies the evidence class
 - [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
-  Expected: FAIL with discovered-output or expiry-behavior assertions.
-- [ ] Implement discovered-output selection using the same job-level encryption decision.
+  Expected: FAIL with discovered-output, `extra_files`, verifier, allow-list, or expiry-behavior assertions.
+- [ ] Implement discovered-output selection using core persisted dataset mapping rather than collector-subset logic.
+- [ ] Implement encryption coverage for `extra_files` payload files plus manifest evidence linked to the owning dataset.
+- [ ] Implement/reuse payload-marker evidence for declared/discovered payloads and add `extra_files` manifest evidence that the verifier can consume.
+- [ ] Implement a universal pre-success fail-closed verifier over all persisted payload candidates for Crypt4GH jobs.
+- [ ] Implement plaintext allow-list exclusions for framework/control artifacts and the current `stdout/stderr` exception without weakening dataset-payload enforcement.
 - [ ] Implement Galaxy-side TTL preflight before the first B contact.
 - [ ] Implement fail-closed mid-run expiry handling during output finalization.
 - [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
   Expected: PASS.
-- [ ] Refactor any duplicated selection or expiry logic.
+- [ ] Refactor any duplicated selection, evidence, verifier, or expiry logic.
 - [ ] Re-run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
   Expected: PASS.
 - [ ] Commit checkpoint in the Galaxy repo:
-  `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: cover discovered outputs and expiry failures"`
+  `git add lib/galaxy/tools/crypt4gh_remote_execution.py test/unit/jobs/test_crypt4gh_remote_execution.py test/integration/test_crypt4gh_remote_execution.py && git commit -m "feat: enforce crypt4gh persisted output coverage"`
 
 ## Task 8: Remove old staging path and update operator/config surfaces
 
@@ -310,6 +339,7 @@ Minimum verification commands for the finished slice:
   - `pytest test/integration/test_crypt4gh_remote_execution.py -k inheritance_simple -q`
   - `pytest test/integration/test_crypt4gh_remote_execution.py -k output_format -q`
   Expected: PASS for all commands.
+- [ ] Confirm the full integration module now includes the addendum proof cases for discovered outputs, `extra_files`, dataset-centric path divergence, verifier failure, and plaintext allow-list behavior.
 - [ ] Define the live-service switch in `test/integration/test_crypt4gh_remote_execution.py` explicitly: `handle_galaxy_config_kwds` reads `GALAXY_TEST_CRYPT4GH_REENCRYPTION_SERVICE_URL`; when set, it writes that value to `config["crypt4gh_reencryption_service_url"]` and skips any in-process mock-service startup so the same integration tests can target a real compute-mode service unchanged.
 - [ ] Run one live cross-repo smoke check against the real compute-mode service after the mock-based tests are green.
   Suggested shape:
@@ -329,9 +359,10 @@ Minimum verification commands for the finished slice:
 
 ## User check-in markers for implementers
 
-- **User Check-in A:** Pause if Galaxy's real output-import/discovery behavior makes it impossible to keep tool-visible plaintext entirely under `_crypt/outputs/` without a broader architecture change.
+- **User Check-in A:** Pause if Galaxy's real output-import/discovery behavior makes it impossible to preserve the dataset-centric persisted-payload contract while keeping runtime-controlled plaintext staging under `_crypt/outputs/` where applicable.
 - **User Check-in B:** Pause if `remote_tool_eval.py` cannot support the required non-Pulsar tracer bullet without changing the approved “thin entrypoint + dedicated helper” boundary.
 - **User Check-in C:** Pause if recryptor B needs lookup state beyond the approved minimal key-id index metadata (`user_hash`, `expiration`) or cannot preserve hashed-directory linkage as source of truth.
+- **User Check-in D:** Pause if output-enforcement correctness appears to require plaintext exceptions beyond the approved framework/control allow-list plus the temporary `stdout/stderr` exception.
 
 ## Follow-up work explicitly out of this plan
 
@@ -339,3 +370,4 @@ Minimum verification commands for the finished slice:
 - Authentication/authorization hardening between Galaxy, A, and B
 - Any mixed encrypted/plain final dataset import policy
 - Any compute-key renewal workflow
+- Secure `stdout/stderr` handling beyond the temporary plaintext exception noted in the 2026-07-14 addendum
