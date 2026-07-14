@@ -401,6 +401,40 @@ def test_persist_target_sample_sheet_paired():
         assert f.read().startswith("file 2 contents")
 
 
+def test_model_create_context_persist_hda_with_runtime_crypt4gh_extension():
+    work_directory = mkdtemp()
+    with open(os.path.join(work_directory, "file1.txt"), "w") as f:
+        f.write("hello world\nhello world line 2")
+
+    target = {
+        "destination": {
+            "type": "hdas",
+        },
+        "elements": [
+            {
+                "filename": "file1.txt",
+                "ext": "tabular.c4gh",
+                "dbkey": "hg19",
+                "name": "encrypted file",
+            }
+        ],
+    }
+
+    app = _mock_app()
+    assert app.datatypes_registry.get_datatype_by_extension("tabular.c4gh") is None
+
+    temp_directory = mkdtemp()
+    with store.DirectoryModelExportStore(temp_directory, serialize_dataset_objects=True) as export_store:
+        persist_target_to_export_store(target, export_store, app.object_store, work_directory)
+
+    import_history = _import_directory_to_history(app, temp_directory, work_directory)
+
+    assert len(import_history.datasets) == 1
+    imported_hda = import_history.datasets[0]
+    assert imported_hda.ext == "tabular.c4gh"
+    assert imported_hda.datatype.file_ext == "tabular.c4gh"
+
+
 def _assert_one_library_created(sa_session):
     all_libraries = sa_session.scalars(select(model.Library)).all()
     assert len(all_libraries) == 1, len(all_libraries)
