@@ -4,6 +4,7 @@ from datetime import (
 )
 from pathlib import Path
 import subprocess
+from typing import cast
 
 import pytest
 
@@ -344,6 +345,169 @@ def test_http_url_does_not_attempt_truststore_even_on_dev_host():
     )
 
     assert ssl_context is None
+
+
+def test_prepare_plaintext_inputs_batches_recrypt_calls_in_single_async_run(monkeypatch):
+    datasets = [
+        _BuildDataset(
+            dataset_id=1,
+            metadata=_DatasetMetadata(crypt4gh_header="header-1", expiration="2099-01-01T00:00:00+00:00"),
+        ),
+        _BuildDataset(
+            dataset_id=2,
+            metadata=_DatasetMetadata(crypt4gh_header="header-2", expiration="2099-01-01T00:00:00+00:00"),
+        ),
+    ]
+
+    async_run_calls = []
+    recrypt_calls = []
+
+    def _fake_decrypt_recrypted_input(**kwargs):
+        del kwargs
+
+    monkeypatch.setattr(
+        crypt4gh_remote_execution,
+        "_decrypt_recrypted_input",
+        _fake_decrypt_recrypted_input,
+    )
+    monkeypatch.setattr(
+        crypt4gh_remote_execution,
+        "_prepare_plaintext_input_for_dataset",
+        lambda **kwargs: (cast(int, kwargs["dataset"].dataset.id), f"/tmp/crypt-inputs/ds_{kwargs['dataset'].dataset.id}/plaintext"),
+    )
+
+    def _fake_build_recrypt_payloads(*, datasets, job_public_key):
+        del job_public_key
+        payloads = []
+        for dataset in datasets:
+            payloads.append(
+                {
+                    "dataset": dataset,
+                    "dataset_id": cast(int, dataset.dataset.id),
+                    "source_header": cast(str, dataset.metadata.crypt4gh_header),
+                    "compute_keypair_id": "compute-key",
+                    "request_payload": {
+                        "crypt4gh_header": cast(str, dataset.metadata.crypt4gh_header),
+                        "crypt4gh_compute_keypair_id": "compute-key",
+                        "crypt4gh_job_public_key": "job-public",
+                    },
+                }
+            )
+        return payloads
+
+    def _fake_post_many_reencryption_json(**kwargs):
+        recrypt_calls.append(kwargs)
+        return [
+            crypt4gh_remote_execution._ReencryptionHttpResponse(
+                status_code=200,
+                text="",
+                json_payload={
+                    "crypt4gh_header": "recrypted-header-1",
+                    "crypt4gh_compute_public_key": "compute-pub",
+                    "crypt4gh_compute_keypair_id": "compute-key-id",
+                    "crypt4gh_compute_keypair_expiration_date": "2099-01-01T00:00:00+00:00",
+                },
+            ),
+            crypt4gh_remote_execution._ReencryptionHttpResponse(
+                status_code=200,
+                text="",
+                json_payload={
+                    "crypt4gh_header": "recrypted-header-2",
+                    "crypt4gh_compute_public_key": "compute-pub",
+                    "crypt4gh_compute_keypair_id": "compute-key-id",
+                    "crypt4gh_compute_keypair_expiration_date": "2099-01-01T00:00:00+00:00",
+                },
+            ),
+        ]
+
+    monkeypatch.setattr(
+        crypt4gh_remote_execution,
+        "_build_recrypt_payloads",
+        _fake_build_recrypt_payloads,
+    )
+    monkeypatch.setattr(
+        crypt4gh_remote_execution,
+        "_post_many_reencryption_json",
+        _fake_post_many_reencryption_json,
+    )
+
+    input_path_overrides_by_dataset_id, compute_context = crypt4gh_remote_execution._prepare_plaintext_inputs(
+        datasets=datasets,
+        crypt_inputs_workspace=Path("/tmp/crypt-inputs"),
+        reencryption_service_url="https://localhost:8443",
+        job_public_key="job-public",
+        job_private_key=b"job-private",
+    )
+
+    assert len(async_run_calls) == 0
+    assert len(recrypt_calls) == 1
+    assert set(input_path_overrides_by_dataset_id.keys()) == {1, 2}
+    assert compute_context.public_key == "compute-pub"
+
+
+def test_prepare_plaintext_inputs_detects_mismatched_batch_response_count(monkeypatch):
+    datasets = [
+        _BuildDataset(
+            dataset_id=1,
+            metadata=_DatasetMetadata(crypt4gh_header="header-1", expiration="2099-01-01T00:00:00+00:00"),
+        ),
+        _BuildDataset(
+            dataset_id=2,
+            metadata=_DatasetMetadata(crypt4gh_header="header-2", expiration="2099-01-01T00:00:00+00:00"),
+        ),
+    ]
+
+    def _fake_build_recrypt_payloads(*, datasets, job_public_key):
+        del job_public_key
+        return [
+            {
+                "dataset": dataset,
+                "dataset_id": cast(int, dataset.dataset.id),
+                "source_header": cast(str, dataset.metadata.crypt4gh_header),
+                "compute_keypair_id": "compute-key",
+                "request_payload": {
+                    "crypt4gh_header": cast(str, dataset.metadata.crypt4gh_header),
+                    "crypt4gh_compute_keypair_id": "compute-key",
+                    "crypt4gh_job_public_key": "job-public",
+                },
+            }
+            for dataset in datasets
+        ]
+
+    def _fake_post_many_reencryption_json(**kwargs):
+        del kwargs
+        return [
+            crypt4gh_remote_execution._ReencryptionHttpResponse(
+                status_code=200,
+                text="",
+                json_payload={
+                    "crypt4gh_header": "recrypted-header-1",
+                    "crypt4gh_compute_public_key": "compute-pub",
+                    "crypt4gh_compute_keypair_id": "compute-key-id",
+                    "crypt4gh_compute_keypair_expiration_date": "2099-01-01T00:00:00+00:00",
+                },
+            )
+        ]
+
+    monkeypatch.setattr(
+        crypt4gh_remote_execution,
+        "_build_recrypt_payloads",
+        _fake_build_recrypt_payloads,
+    )
+    monkeypatch.setattr(
+        crypt4gh_remote_execution,
+        "_post_many_reencryption_json",
+        _fake_post_many_reencryption_json,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="one response per dataset"):
+        crypt4gh_remote_execution._prepare_plaintext_inputs(
+            datasets=datasets,
+            crypt_inputs_workspace=Path("/tmp/crypt-inputs"),
+            reencryption_service_url="https://localhost:8443",
+            job_public_key="job-public",
+            job_private_key=b"job-private",
+        )
 
 
 def test_finalize_discovered_outputs_writes_path_markers(tmp_path, monkeypatch):

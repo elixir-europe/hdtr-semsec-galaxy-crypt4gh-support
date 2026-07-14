@@ -139,6 +139,41 @@ async def _post_reencryption_json_async(
             )
 
 
+async def _post_many_reencryption_json_async(
+    *,
+    endpoint: str,
+    payloads: Sequence[dict[str, str]],
+    ssl_context: Optional[ssl.SSLContext],
+) -> list[_ReencryptionHttpResponse]:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as request_session:
+        requests_to_send = [
+            request_session.post(endpoint, json=payload, ssl=ssl_context)
+            for payload in payloads
+        ]
+        responses = await asyncio.gather(*requests_to_send)
+        try:
+            results: list[_ReencryptionHttpResponse] = []
+            for response in responses:
+                response_text = await response.text()
+                try:
+                    response_json: Any = json.loads(response_text) if response_text else None
+                except ValueError:
+                    response_json = None
+
+                results.append(
+                    _ReencryptionHttpResponse(
+                        status_code=response.status,
+                        text=response_text,
+                        json_payload=response_json,
+                    )
+                )
+            return results
+        finally:
+            for response in responses:
+                response.release()
+
+
 def _post_reencryption_json(*, reencryption_service_url: str, endpoint: str, payload: dict[str, str]) -> _ReencryptionHttpResponse:
     ssl_context = _ssl_context_for_reencryption_url(
         reencryption_service_url=reencryption_service_url,
@@ -148,6 +183,25 @@ def _post_reencryption_json(*, reencryption_service_url: str, endpoint: str, pay
         _post_reencryption_json_async(
             endpoint=endpoint,
             payload=payload,
+            ssl_context=ssl_context,
+        )
+    )
+
+
+def _post_many_reencryption_json(
+    *,
+    reencryption_service_url: str,
+    endpoint: str,
+    payloads: Sequence[dict[str, str]],
+) -> list[_ReencryptionHttpResponse]:
+    ssl_context = _ssl_context_for_reencryption_url(
+        reencryption_service_url=reencryption_service_url,
+        truststore_module=_optional_truststore,
+    )
+    return asyncio.run(
+        _post_many_reencryption_json_async(
+            endpoint=endpoint,
+            payloads=payloads,
             ssl_context=ssl_context,
         )
     )
@@ -314,15 +368,31 @@ def _prepare_plaintext_inputs(
     job_public_key: str,
     job_private_key: bytes,
 ) -> tuple[dict[int, str], _ComputeKeyContext]:
+    endpoint = f"{reencryption_service_url.rstrip('/')}/recrypt_header_to_job_key"
+    recrypt_payloads = _build_recrypt_payloads(datasets=datasets, job_public_key=job_public_key)
+    responses = _post_many_reencryption_json(
+        reencryption_service_url=reencryption_service_url,
+        endpoint=endpoint,
+        payloads=[payload["request_payload"] for payload in recrypt_payloads],
+    )
+    if len(responses) != len(recrypt_payloads):
+        raise Crypt4GHRemoteExecutionError(
+            "Compute-side recryptor B must return one response per dataset for /recrypt_header_to_job_key"
+        )
+
     input_path_overrides_by_dataset_id: dict[int, str] = {}
     compute_context: Optional[_ComputeKeyContext] = None
 
-    for dataset in datasets:
-        dataset_id, plaintext_path, recrypt_result = _prepare_plaintext_input_for_dataset(
-            dataset=dataset,
+    for payload, response in zip(recrypt_payloads, responses):
+        recrypt_result = _parse_recrypt_header_to_job_key_response(
+            response=response,
+            endpoint=endpoint,
+        )
+        dataset_id, plaintext_path = _prepare_plaintext_input_for_dataset(
+            dataset=cast(Any, payload["dataset"]),
+            source_header=cast(str, payload["source_header"]),
+            recrypt_header=recrypt_result.crypt4gh_header,
             crypt_inputs_workspace=crypt_inputs_workspace,
-            reencryption_service_url=reencryption_service_url,
-            job_public_key=job_public_key,
             job_private_key=job_private_key,
         )
         input_path_overrides_by_dataset_id[dataset_id] = plaintext_path
@@ -343,6 +413,69 @@ def _prepare_plaintext_inputs(
         )
 
     return input_path_overrides_by_dataset_id, compute_context
+
+
+def _build_recrypt_payloads(
+    *,
+    datasets: Sequence[DatasetInstance],
+    job_public_key: str,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for dataset in datasets:
+        dataset_object = getattr(dataset, "dataset", None)
+        dataset_id = getattr(dataset_object, "id", None)
+        if not isinstance(dataset_id, int):
+            raise Crypt4GHRemoteExecutionError("Crypt4GH input dataset is missing a persisted dataset id")
+
+        metadata = getattr(dataset, "metadata", None)
+        header = getattr(metadata, "crypt4gh_header", None)
+        keypair_id = getattr(metadata, "crypt4gh_compute_keypair_id", None)
+        if not header or not keypair_id:
+            raise Crypt4GHRemoteExecutionError(
+                "Crypt4GH input metadata must include crypt4gh_header and crypt4gh_compute_keypair_id"
+            )
+
+        payloads.append(
+            {
+                "dataset": dataset,
+                "dataset_id": dataset_id,
+                "source_header": cast(str, header),
+                "request_payload": {
+                    "crypt4gh_header": cast(str, header),
+                    "crypt4gh_compute_keypair_id": cast(str, keypair_id),
+                    "crypt4gh_job_public_key": job_public_key,
+                },
+            }
+        )
+    return payloads
+
+
+def _parse_recrypt_header_to_job_key_response(
+    *,
+    response: _ReencryptionHttpResponse,
+    endpoint: str,
+) -> _RecryptToJobKeyResult:
+    if not response.ok:
+        raise Crypt4GHRemoteExecutionError(
+            f"Compute-side recryptor B returned HTTP {response.status_code} for {endpoint}: "
+            f"{_summarize_http_error_response(response)}"
+        )
+
+    try:
+        response_json = response.json_payload
+        if not isinstance(response_json, dict):
+            raise ValueError("Response body is not a JSON object")
+
+        return _RecryptToJobKeyResult(
+            crypt4gh_header=cast(str, response_json["crypt4gh_header"]),
+            crypt4gh_compute_public_key=cast(str, response_json["crypt4gh_compute_public_key"]),
+            crypt4gh_compute_keypair_id=cast(str, response_json["crypt4gh_compute_keypair_id"]),
+            crypt4gh_compute_keypair_expiration_date=cast(str, response_json["crypt4gh_compute_keypair_expiration_date"]),
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        raise Crypt4GHRemoteExecutionError(
+            "Compute-side recryptor B returned an invalid /recrypt_header_to_job_key payload"
+        ) from exc
 
 
 def _assert_consistent_compute_key_context(*, existing: _ComputeKeyContext, candidate: _ComputeKeyContext) -> None:
@@ -474,30 +607,15 @@ def _generate_job_keypair() -> tuple[bytes, str]:
 def _prepare_plaintext_input_for_dataset(
     *,
     dataset: DatasetInstance,
+    source_header: str,
+    recrypt_header: str,
     crypt_inputs_workspace: Path,
-    reencryption_service_url: str,
-    job_public_key: str,
     job_private_key: bytes,
-) -> tuple[int, str, _RecryptToJobKeyResult]:
+) -> tuple[int, str]:
     dataset_object = getattr(dataset, "dataset", None)
     dataset_id = getattr(dataset_object, "id", None)
     if not isinstance(dataset_id, int):
         raise Crypt4GHRemoteExecutionError("Crypt4GH input dataset is missing a persisted dataset id")
-
-    metadata = getattr(dataset, "metadata", None)
-    header = getattr(metadata, "crypt4gh_header", None)
-    keypair_id = getattr(metadata, "crypt4gh_compute_keypair_id", None)
-    if not header or not keypair_id:
-        raise Crypt4GHRemoteExecutionError(
-            "Crypt4GH input metadata must include crypt4gh_header and crypt4gh_compute_keypair_id"
-        )
-
-    recrypt_result = _recrypt_header_to_job_key(
-        reencryption_service_url=reencryption_service_url,
-        crypt4gh_header=cast(str, header),
-        compute_keypair_id=cast(str, keypair_id),
-        job_public_key=job_public_key,
-    )
 
     dataset_workspace = crypt_inputs_workspace / f"ds_{dataset_id}"
     dataset_workspace.mkdir(parents=True, exist_ok=True)
@@ -506,12 +624,12 @@ def _prepare_plaintext_input_for_dataset(
     source_dataset_path = Path(dataset.get_file_name())
     _decrypt_recrypted_input(
         source_dataset_path=source_dataset_path,
-        source_header=cast(str, header),
-        recrypted_header=recrypt_result.crypt4gh_header,
+        source_header=source_header,
+        recrypted_header=recrypt_header,
         plaintext_path=plaintext_path,
         job_private_key=job_private_key,
     )
-    return dataset_id, str(plaintext_path), recrypt_result
+    return dataset_id, str(plaintext_path)
 
 
 def _recrypt_header_to_job_key(
