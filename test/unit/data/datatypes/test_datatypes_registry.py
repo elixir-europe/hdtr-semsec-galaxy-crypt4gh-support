@@ -3,6 +3,7 @@ import io
 
 import crypt4gh.header
 
+from galaxy import model
 from galaxy.datatypes import sniff
 from galaxy.datatypes.registry import example_datatype_registry_for_sample
 from .util import (
@@ -151,6 +152,17 @@ def test_crypt4gh_runtime_wrapper_registration_for_missing_base_datatype_wrapper
 
     # Repeated requests should return the already-registered instance.
     assert datatypes_registry.get_or_create_crypt4gh_datatype("fqtoc") is runtime_datatype
+
+
+def test_datatype_for_extension_creates_runtime_crypt4gh_wrapper_when_base_exists():
+    datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
+    assert datatypes_registry.get_datatype_by_extension("fqtoc.c4gh") is None
+
+    runtime_datatype = model.datatype_for_extension("fqtoc.c4gh", datatypes_registry=datatypes_registry)
+
+    assert runtime_datatype is not None
+    assert runtime_datatype.file_ext == "fqtoc.c4gh"
+    assert datatypes_registry.get_datatype_by_extension("fqtoc.c4gh") is runtime_datatype
 
 
 def test_crypt4gh_matches_any_staging_gate():

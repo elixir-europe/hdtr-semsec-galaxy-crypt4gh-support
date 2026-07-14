@@ -173,6 +173,7 @@ from galaxy.objectstore.templates import (
     ObjectStoreTemplate,
     template_to_configuration as object_store_template_to_configuration,
 )
+from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
 from galaxy.schema.invocation import (
     InvocationCancellationUserRequest,
     InvocationState,
@@ -5145,6 +5146,10 @@ def datatype_for_extension(extension, datatypes_registry=None) -> "Data":
     if not extension or extension == "auto" or extension == "_sniff_":
         extension = "data"
     ret = datatypes_registry.get_datatype_by_extension(extension)
+    if ret is None and extension.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
+        base_extension = extension[: -(len(CRYPT4GH_DEFAULT_EXT) + 1)]
+        if base_extension:
+            ret = datatypes_registry.get_or_create_crypt4gh_datatype(base_extension)
     if ret is None:
         log.warning(f"Datatype class not found for extension '{extension}'")
         return datatypes_registry.get_datatype_by_extension("data")
