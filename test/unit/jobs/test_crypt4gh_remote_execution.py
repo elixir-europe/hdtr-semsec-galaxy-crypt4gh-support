@@ -857,6 +857,114 @@ def test_finalize_declared_outputs_deletes_plaintext_output_when_encryption_fail
     assert not output_path.exists()
 
 
+def test_collect_declared_targets_marks_outputs_for_compute_keypair_clearance(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=4)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(output_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    assert targets[0]["clear_compute_keypair"] is True
+
+
+def test_discovered_crypt4gh_metadata_path_clears_compute_keypair_without_generic_set_meta(monkeypatch):
+    from galaxy.model.store.discover import ModelPersistenceContext
+
+    class _Metadata:
+        def __init__(self):
+            self.loaded = None
+
+        def from_JSON_dict(self, json_dict):
+            self.loaded = json_dict
+
+    class _Datatype:
+        def __init__(self):
+            self.calls = []
+
+        def set_meta(self, dataset, **kwd):
+            self.calls.append((dataset, kwd))
+
+    class _PrimaryData:
+        states = type("States", (), {"OK": "ok", "FAILED_METADATA": "failed_metadata"})
+
+        def __init__(self):
+            self.name = "sample"
+            self.info = ""
+            self.dbkey = "?"
+            self.job_working_directory = "/tmp/jobdir"
+            self.extension = "tabular.c4gh"
+            self.state = "ok"
+            self.metadata = _Metadata()
+            self.datatype = _Datatype()
+            self.peek_calls = 0
+            self.total_size_calls = 0
+
+        def set_meta(self):
+            raise AssertionError("generic set_meta should not run for crypt4gh discovered outputs")
+
+        def set_peek(self):
+            self.peek_calls += 1
+
+        def set_total_size(self):
+            self.total_size_calls += 1
+
+    primary_data = _PrimaryData()
+    dataset_attributes = {"ext": "tabular", "clear_crypt4gh_compute_keypair": True}
+
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._resolve_discovered_crypt4gh_extension",
+        lambda *, ext, job_working_directory: "tabular.c4gh",
+    )
+
+    ModelPersistenceContext.set_datasets_metadata([primary_data], [dataset_attributes])
+
+    assert primary_data.datatype.calls == [
+        (
+            primary_data,
+            {"crypt4gh_clear_compute_keypair": True},
+        )
+    ]
+    assert primary_data.peek_calls == 1
+    assert primary_data.total_size_calls == 1
+
+
 def test_finalize_declared_outputs_deletes_dataset_destination_when_encryption_fails(tmp_path, monkeypatch):
     output_path = tmp_path / "working" / "1"
     output_path.parent.mkdir(parents=True, exist_ok=True)

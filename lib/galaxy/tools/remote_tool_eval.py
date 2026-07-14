@@ -162,9 +162,36 @@ def _crypt4gh_cleanup_command(*, galaxy_lib_for_finalize: str, working_directory
     )
 
 
+def _mark_outputs_for_compute_keypair_clearance(
+    *, metadata_params_path: str, output_targets: list[dict[str, object]]
+) -> None:
+    with open(metadata_params_path) as metadata_stream:
+        metadata_params = json.load(metadata_stream)
+
+    outputs_by_path: dict[str, dict[str, object]] = {}
+    for output_metadata in metadata_params.get("outputs", {}).values():
+        filename_override = output_metadata.get("filename_override")
+        if filename_override:
+            outputs_by_path[str(filename_override)] = output_metadata
+
+    for output_target in output_targets:
+        if not output_target.get("clear_compute_keypair"):
+            continue
+        dataset_output_path = output_target.get("dataset_output_path") or output_target.get("output_path")
+        if not dataset_output_path:
+            continue
+        output_metadata = outputs_by_path.get(str(dataset_output_path))
+        if output_metadata is not None:
+            output_metadata["clear_crypt4gh_compute_keypair"] = True
+
+    with open(metadata_params_path, "w") as metadata_stream:
+        json.dump(metadata_params, metadata_stream)
+
+
 def _crypt4gh_finalize_postrun_command(
     *,
     output_targets: list[dict[str, object]],
+    metadata_params_path: str,
     galaxy_lib_for_finalize: str,
     reencryption_service_url: str,
     compute_public_key: str,
@@ -173,8 +200,11 @@ def _crypt4gh_finalize_postrun_command(
 ) -> str:
     finalize_script = (
         "from galaxy.tools.crypt4gh_remote_execution import finalize_declared_crypt4gh_outputs as _f; "
+        "from galaxy.tools.remote_tool_eval import _mark_outputs_for_compute_keypair_clearance as _m; "
         "import json; "
-        f"_f(output_targets=json.loads({json.dumps(json.dumps(output_targets))}), "
+        f"_targets=json.loads({json.dumps(json.dumps(output_targets))}); "
+        f"_m(metadata_params_path={json.dumps(metadata_params_path)}, output_targets=_targets); "
+        f"_f(output_targets=_targets, "
         f"reencryption_service_url={json.dumps(reencryption_service_url)}, "
         f"compute_public_key={json.dumps(compute_public_key)}, "
         f"compute_keypair_id={json.dumps(compute_keypair_id)}, "
@@ -217,8 +247,6 @@ def _persist_failure_outputs(*, working_directory: str, export_store_directory: 
 
 def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
     """Render remote tool command script and persist failure diagnostics."""
-
-    log.warning("remote_tool_eval: main started")
 
     galaxy_lib_for_finalize = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
     metadata_params = get_metadata_params(WORKING_DIRECTORY)
@@ -303,6 +331,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
 
                 postrun_command = _crypt4gh_finalize_postrun_command(
                     output_targets=cast(list[dict[str, object]], output_targets),
+                    metadata_params_path=os.path.join(WORKING_DIRECTORY, "metadata", "params.json"),
                     galaxy_lib_for_finalize=galaxy_lib_for_finalize,
                     reencryption_service_url=reencryption_service_url,
                     compute_public_key=cast(str, compute_public_key),

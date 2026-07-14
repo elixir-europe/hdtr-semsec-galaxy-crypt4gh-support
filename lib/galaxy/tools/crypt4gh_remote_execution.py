@@ -273,6 +273,7 @@ class _DeclaredCrypt4GHOutputTarget:
     plaintext_path: str
     encrypted_marker_path: str
     encrypted_ext: str
+    clear_compute_keypair: bool
 
 
 @dataclass(frozen=True)
@@ -731,6 +732,7 @@ def collect_declared_crypt4gh_output_targets(
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
             encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
             encrypted_ext=encrypted_ext,
+            clear_compute_keypair=True,
         )
         targets.append(_declared_output_target_to_mapping(target))
 
@@ -798,12 +800,13 @@ def _resolve_output_path(*, dataset_path: Any, tool_output: Any, tool_working_di
     )
 
 
-def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, str]:
+def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, Any]:
     mapping = {
         "output_path": target.output_path,
         "plaintext_path": target.plaintext_path,
         "encrypted_marker_path": target.encrypted_marker_path,
         "encrypted_ext": target.encrypted_ext,
+        "clear_compute_keypair": target.clear_compute_keypair,
     }
     if target.dataset_output_path:
         mapping["dataset_output_path"] = target.dataset_output_path
@@ -880,7 +883,7 @@ def finalize_declared_crypt4gh_outputs(
 
 
 def _purge_output_targets_after_finalization_failure(
-    resolved_targets: Sequence[tuple[dict[str, str], Path]],
+    resolved_targets: Sequence[tuple[dict[str, Any], Path]],
 ) -> None:
     for concrete_target, output_path in resolved_targets:
         candidate_paths = [output_path]
@@ -897,9 +900,9 @@ def _purge_output_targets_after_finalization_failure(
 
 def _iter_unique_existing_output_targets(
     output_targets: Sequence[Mapping[str, Any]],
-) -> list[tuple[dict[str, str], Path]]:
+) -> list[tuple[dict[str, Any], Path]]:
     encrypted_paths: set[str] = set()
-    resolved_targets: list[tuple[dict[str, str], Path]] = []
+    resolved_targets: list[tuple[dict[str, Any], Path]] = []
     for target in output_targets:
         declared_output_path = target.get("output_path")
         if declared_output_path:
@@ -925,7 +928,7 @@ def _iter_unique_existing_output_targets(
 
 def _finalize_output_target(
     *,
-    concrete_target: Mapping[str, str],
+    concrete_target: Mapping[str, Any],
     output_path: Path,
     reencryption_service_url: str,
     compute_public_key: str,
@@ -970,7 +973,7 @@ def _finalize_output_target(
             final_tmp_path.unlink()
 
 
-def _write_output_markers(concrete_target: Mapping[str, str]) -> None:
+def _write_output_markers(concrete_target: Mapping[str, Any]) -> None:
     marker_path_value = concrete_target.get("encrypted_marker_path")
     if marker_path_value:
         marker_path = Path(marker_path_value)
@@ -987,7 +990,7 @@ def _write_output_markers(concrete_target: Mapping[str, str]) -> None:
         )
 
 
-def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, str]]:
+def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, Any]]:
     output_path = target.get("output_path")
     if output_path:
         concrete_target = {
@@ -995,6 +998,7 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, str]]:
             "plaintext_path": str(target["plaintext_path"]),
             "encrypted_ext": str(target["encrypted_ext"]),
             "encrypted_marker_path": str(target.get("encrypted_marker_path", "")),
+            "clear_compute_keypair": bool(target.get("clear_compute_keypair", False)),
         }
         dataset_output_path = target.get("dataset_output_path")
         if dataset_output_path:
@@ -1026,7 +1030,7 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, str]]:
     discovered_marker_map_path = str(Path(marker_dir) / "discovered_designations.json") if marker_dir else ""
     encrypted_ext = str(target["encrypted_ext"])
 
-    targets: list[dict[str, str]] = []
+    targets: list[dict[str, Any]] = []
     for index, discovered_path in enumerate(discovered_paths):
         match = matcher.match(discovered_path.name)
         designation = ""
@@ -1049,6 +1053,7 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, str]]:
                 "encrypted_marker_path": marker_path,
                 "designation": designation,
                 "discovered_marker_map_path": discovered_marker_map_path,
+                "clear_compute_keypair": bool(target.get("clear_compute_keypair", False)),
             }
         )
     return targets

@@ -398,7 +398,7 @@ def collect_primary_datasets(job_context: BaseJobContext, output: dict[str, Data
             ext = fields_match.ext
             if ext == "input":
                 ext = input_ext
-            ext = ext.lower()
+            ext = job_context._resolve_discovered_crypt4gh_extension(ext.lower())
             dbkey = fields_match.dbkey
             if dbkey == INPUT_DBKEY_TOKEN:
                 dbkey = job_context.input_dbkey
@@ -458,6 +458,11 @@ def collect_primary_datasets(job_context: BaseJobContext, output: dict[str, Data
             # Add dataset to return dict
             primary_datasets[name][designation] = primary_data
         if primary_output_assigned:
+            if (
+                job_context.final_job_state != outdata.states.ERROR
+                and outdata.state not in (outdata.states.ERROR, outdata.states.DEFERRED)
+            ):
+                outdata.state = outdata.states.OK
             outdata.name = new_outdata_name
             outdata.init_meta()
             if not outdata.dataset.purged:

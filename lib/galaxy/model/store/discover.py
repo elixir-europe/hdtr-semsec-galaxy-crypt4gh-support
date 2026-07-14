@@ -24,6 +24,7 @@ from typing import (
 import galaxy.model
 from galaxy import util
 from galaxy.exceptions import RequestParameterInvalidException
+from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
 from galaxy.model import (
     Dataset,
     JobOutputNameTooLongError,
@@ -83,6 +84,9 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
 
     def get_job(self) -> Optional[galaxy.model.Job]:
         return getattr(self, "job", None)
+
+    def _resolve_discovered_crypt4gh_extension(self, ext: str) -> str:
+        return _resolve_discovered_crypt4gh_extension(ext=ext, job_working_directory=self.job_working_directory)
 
     def create_dataset(
         self,
@@ -163,6 +167,7 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
                 self.add_library_dataset_to_folder(library_folder, ld)
                 primary_data = ldda
         primary_data.state = final_job_state
+        setattr(primary_data, "job_working_directory", self.job_working_directory)
         if final_job_state == galaxy.model.Job.states.ERROR and not self.get_implicit_collection_jobs_association_id():
             primary_data.visible = True
 
@@ -293,10 +298,16 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
                 dataset_att_by_name = dict(ext="extension")
                 for att_set in ["name", "info", "ext", "dbkey"]:
                     dataset_att_name = dataset_att_by_name.get(att_set, att_set)
+                    attribute_value = dataset_attributes.get(att_set, getattr(primary_data, dataset_att_name))
+                    if att_set == "ext":
+                        attribute_value = _resolve_discovered_crypt4gh_extension(
+                            ext=str(attribute_value),
+                            job_working_directory=getattr(primary_data, "job_working_directory", "."),
+                        )
                     setattr(
                         primary_data,
                         dataset_att_name,
-                        dataset_attributes.get(att_set, getattr(primary_data, dataset_att_name)),
+                        attribute_value,
                     )
 
             try:
@@ -306,6 +317,10 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
                         metadata_dict["dbkey"] = dataset_attributes["dbkey"]
                     # branch tested with tool_provided_metadata_3 / tool_provided_metadata_10
                     primary_data.metadata.from_JSON_dict(json_dict=metadata_dict)
+                elif dataset_attributes.get("clear_crypt4gh_compute_keypair", False) and str(primary_data.extension).endswith(
+                    f".{CRYPT4GH_DEFAULT_EXT}"
+                ):
+                    primary_data.datatype.set_meta(primary_data, crypt4gh_clear_compute_keypair=True)
                 else:
                     primary_data.set_meta()
             except Exception:
@@ -392,7 +407,7 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             designation = fields_match.designation
             visible = fields_match.visible
             ext = ext_override or fields_match.ext
-            ext = ext.lower()
+            ext = self._resolve_discovered_crypt4gh_extension(ext.lower())
             dbkey = fields_match.dbkey
             extra_files = fields_match.extra_files
             # galaxy.tools.parser.output_collection_def.INPUT_DBKEY_TOKEN
@@ -603,6 +618,51 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             raise MaxDiscoveredFilesExceededError(
                 f"Job generated more than maximum number ({self.max_discovered_files}) of output datasets"
             )
+
+
+def _resolve_discovered_crypt4gh_extension(*, ext: str, job_working_directory: str) -> str:
+    """Resolve ext to encrypted datatype when crypt4gh staging is active for this job.
+
+    If the crypt4gh staging marker directory exists, all discovered outputs for the job
+    are expected to be encrypted by finalize_declared_crypt4gh_outputs.
+    """
+    marker_dir = _first_existing_crypt4gh_marker_directory(job_working_directory=job_working_directory)
+    if marker_dir is None:
+        return ext
+
+    datatypes_registry = galaxy.model._get_datatypes_registry()
+    encrypted_ext = f"{ext}.{CRYPT4GH_DEFAULT_EXT}"
+    if datatypes_registry.get_datatype_by_extension(encrypted_ext) is not None:
+        return encrypted_ext
+    if datatypes_registry.get_or_create_crypt4gh_datatype(ext) is not None:
+        return encrypted_ext
+    return CRYPT4GH_DEFAULT_EXT
+
+
+def _has_discovered_crypt4gh_markers(*, job_working_directory: str) -> bool:
+    marker_dir = _first_existing_crypt4gh_marker_directory(job_working_directory=job_working_directory)
+    if marker_dir is None:
+        return False
+    designation_markers_path = os.path.join(marker_dir, "discovered_designations.json")
+    if os.path.isfile(designation_markers_path):
+        return True
+    return any(entry.startswith("path_") and entry.endswith(".encrypted") for entry in os.listdir(marker_dir))
+
+
+def _first_existing_crypt4gh_marker_directory(*, job_working_directory: str) -> Optional[str]:
+    for marker_dir in _crypt4gh_marker_directories(job_working_directory=job_working_directory):
+        if os.path.isdir(marker_dir):
+            return marker_dir
+    return None
+
+
+def _crypt4gh_marker_directories(*, job_working_directory: str) -> list[str]:
+    working_directory_str = os.fspath(job_working_directory)
+    candidate_directories = [os.path.join(working_directory_str, "_c4gh_stage", "outputs")]
+    parent_working_directory = os.path.dirname(working_directory_str.rstrip(os.sep))
+    if parent_working_directory and parent_working_directory != working_directory_str:
+        candidate_directories.append(os.path.join(parent_working_directory, "_c4gh_stage", "outputs"))
+    return candidate_directories
 
 
 class PermissionProvider(metaclass=abc.ABCMeta):
@@ -861,7 +921,7 @@ def persist_elements_to_folder(
             fields_match = discovered_file.match
             designation = fields_match.designation
             visible = fields_match.visible
-            ext = fields_match.ext
+            ext = model_persistence_context._resolve_discovered_crypt4gh_extension(fields_match.ext)
             dbkey = fields_match.dbkey
             link_data = discovered_file.match.link_data
 
@@ -903,7 +963,7 @@ def persist_hdas(elements, model_persistence_context: ModelPersistenceContext, f
                 discovered_file = discovered_file_for_element(element, model_persistence_context)
                 fields_match = discovered_file.match
                 designation = fields_match.designation
-                ext = fields_match.ext
+                ext = model_persistence_context._resolve_discovered_crypt4gh_extension(fields_match.ext)
                 dbkey = fields_match.dbkey
                 tag_list = element.get("tags")
                 link_data = discovered_file.match.link_data

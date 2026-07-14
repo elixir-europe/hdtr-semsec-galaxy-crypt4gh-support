@@ -474,6 +474,9 @@ def set_metadata_portable(
             if output_dict.get("validate", False):
                 set_validated_state(dataset)
 
+            if output_dict.get("clear_crypt4gh_compute_keypair", False):
+                dataset.datatype.set_meta(dataset, crypt4gh_clear_compute_keypair=True)
+
             if extended_metadata_collection:
                 if not object_store or not export_store:
                     # Can't happen, but type system doesn't know

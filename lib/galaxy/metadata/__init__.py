@@ -206,6 +206,7 @@ class PortableDirectoryMetadataGenerator(MetadataCollectionStrategy):
                 "validate": validate_outputs,
                 "object_store_store_by": dataset.dataset.store_by,
                 "id": dataset.id,
+                "clear_crypt4gh_compute_keypair": False,
                 "model_class": (
                     "LibraryDatasetDatasetAssociation"
                     if isinstance(dataset, galaxy.model.LibraryDatasetDatasetAssociation)
