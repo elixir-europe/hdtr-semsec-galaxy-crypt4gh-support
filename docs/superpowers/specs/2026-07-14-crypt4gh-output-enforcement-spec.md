@@ -13,6 +13,10 @@ Primary prior artifact:
 
 - `crypt4gh-phase-2-implementation-plan.md`
 
+Additional prior architecture artifact:
+
+- `crypt4gh-phase-2-reimplementation-design.md`
+
 Related context artifact:
 
 - `docs/extended-metadata-history-running-issue.md` (general history-state fix; not Crypt4GH-specific and not changed by this addendum)
@@ -38,6 +42,20 @@ Related context artifact:
 5. **Plaintext allow-list is explicit**
    - Prior plan did not enumerate a strict allow-list.
    - This addendum explicitly allows plaintext only for framework/control artifacts and (for now) stdout/stderr.
+
+### Differences/clarifications relative to the reimplementation design (normative)
+
+1. **Design-level intent becomes enforceable output invariant**
+   - Reimplementation design states plaintext should exist only in compute-local, job-scoped workspace and final exported datasets return encrypted-at-rest.
+   - This addendum makes that enforceable through a fail-closed verifier over persisted output payloads.
+
+2. **Output selection is concretized as dataset-payload-centric**
+   - Reimplementation design describes selected Galaxy-imported outputs and discovered outputs in scope.
+   - This addendum requires selection semantics aligned with core persisted payload mapping, not collector-subtype-limited Crypt4GH-specific traversal.
+
+3. **`extra_files` confidentiality is elevated from implicit to explicit MUST**
+   - Reimplementation design does not define concrete `extra_files` enforcement semantics.
+   - This addendum requires `extra_files` payload encryption for Crypt4GH jobs.
 
 ## Path model and why `/outputs` is optional
 
