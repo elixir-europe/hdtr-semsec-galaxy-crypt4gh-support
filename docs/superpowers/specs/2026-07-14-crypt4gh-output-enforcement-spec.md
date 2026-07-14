@@ -21,6 +21,17 @@ Related context artifact:
 
 - `docs/extended-metadata-history-running-issue.md` (general history-state fix; not Crypt4GH-specific and not changed by this addendum)
 
+## Precedence and supersession (normative)
+
+For output-enforcement semantics, this addendum is authoritative.
+
+If any output-enforcement statement in either of the following artifacts conflicts with this addendum, this addendum overrides that conflicting statement:
+
+- `crypt4gh-phase-2-implementation-plan.md`
+- `crypt4gh-phase-2-reimplementation-design.md`
+
+Non-output-enforcement content in those artifacts remains in effect unless separately superseded.
+
 ### Differences from the previous plan (normative)
 
 1. **Discovered outputs selection model is tightened**
@@ -71,6 +82,12 @@ Relevant path categories:
 
 Because `false_path`/`real_path` and discovery paths vary by runner/config/tool wiring, directory-only selection (e.g., “encrypt everything under `/outputs`”) is insufficient and can miss persisted payloads or encrypt framework files that must remain readable.
 
+## Definition: Crypt4GH jobs (normative)
+
+In this addendum, a **Crypt4GH job** is any job where input evaluation triggers Crypt4GH runtime handling (for example: at least one input dataset carries Crypt4GH metadata/header context that causes the runtime helper path to activate).
+
+For such jobs, **all Galaxy-imported persisted dataset payloads produced by that job are in scope** for output-enforcement checks in this addendum.
+
 ## Security invariant (normative)
 
 For Crypt4GH jobs, final success is permitted **only if all persisted output payloads are encrypted**.
@@ -92,9 +109,15 @@ If any persisted payload lacks encryption evidence at pre-success verification t
 
 ### Allowed plaintext (current phase)
 
-- `metadata/**` and other framework/control files required for orchestration/import
-- tool script/control artifacts
-- `stdout/stderr` (deferred for separate secure-log design)
+Allowed plaintext is limited to files that are **not imported/persisted as dataset payloads**.
+
+Concrete allowed examples:
+
+- metadata/control artifacts used by orchestration/import (for example `metadata/params.json`, `metadata/metadata_kwds_*`, `metadata/metadata_out_*`, `metadata/metadata_results_*`)
+- tool script/control artifacts (for example `tool_script.sh`, exit-code/control files)
+- `stdout/stderr` streams (deferred for separate secure-log design)
+
+If a file is selected for persistence as dataset payload content (primary dataset payload or `extra_files` payload), it is out of this plaintext allow-list even if located near control paths.
 
 ## Enforcement flow (normative)
 
@@ -140,7 +163,18 @@ If any required payload is plaintext or lacks evidence:
 2. Discovered outputs: encryption coverage for non-pattern discovery paths that persist datasets
 3. `extra_files`: encryption + manifest completeness
 4. Fail-closed verifier: any missing evidence forces ERROR
-5. Plaintext allow-list: framework/control files remain readable; output payload policy still enforced
+5. Dataset-centric selection proof: encryption target selection follows persisted dataset mapping rather than directory assumptions (path-model divergence case, e.g. `false_path` vs `real_path`, and/or persisted discovered output outside `/outputs`)
+6. Plaintext allow-list: framework/control files remain readable; output payload policy still enforced
+
+## Planner alignment note (required follow-up)
+
+At the time of this addendum, `crypt4gh-phase-2-implementation-plan.md` task/test text is not yet fully aligned with this enforcement scope.
+
+Required follow-up planner edits must explicitly cover:
+
+- `extra_files` payload encryption requirements
+- universal pre-success fail-closed verification over persisted payloads
+- dataset-centric proof cases (including path-model divergence)
 
 ## User check-in marker
 
