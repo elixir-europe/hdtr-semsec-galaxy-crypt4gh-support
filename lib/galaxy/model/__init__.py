@@ -5146,8 +5146,9 @@ def datatype_for_extension(extension, datatypes_registry=None) -> "Data":
     if not extension or extension == "auto" or extension == "_sniff_":
         extension = "data"
     ret = datatypes_registry.get_datatype_by_extension(extension)
-    if ret is None and extension.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
-        base_extension = extension[: -(len(CRYPT4GH_DEFAULT_EXT) + 1)]
+    crypt4gh_suffix = f".{CRYPT4GH_DEFAULT_EXT}"
+    if ret is None and extension.endswith(crypt4gh_suffix):
+        base_extension = extension.removesuffix(crypt4gh_suffix)
         if base_extension:
             ret = datatypes_registry.get_or_create_crypt4gh_datatype(base_extension)
     if ret is None:
