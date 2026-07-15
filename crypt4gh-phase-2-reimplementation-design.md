@@ -6,6 +6,8 @@ This design supersedes the **Phase 2** and **Phase 3** runtime architecture desc
 
 The earlier design assumed a single external re-encryptor service and let Galaxy-side job preparation author decrypt/encrypt behavior. `crypt4gh-remote-exec-findings.md` invalidates that approach for the desired trust model: sensitive runtime crypto behavior must move to the execution side, and the recryptor concept must be split into a user-side service (**A**) and a compute-side service (**B**).
 
+Output-enforcement supersession note: `docs/superpowers/specs/2026-07-14-crypt4gh-output-enforcement-spec.md` is now authoritative for output-enforcement semantics. This design remains the binding architecture artifact for the broader phase-2 runtime shape, but the output-enforcement callouts below are retained as historical design text and are out of date wherever they conflict with the newer addendum's dataset-payload-centric selection model, explicit `extra_files` coverage, and universal pre-success fail-closed verifier.
+
 ## Goal
 
 Reimplement Crypt4GH execution support beyond Phase 1 so that:
@@ -98,6 +100,8 @@ The execution-side helper is responsible for:
 - encrypting selected Galaxy-imported outputs into the B-managed temporary compute-key context before they are exported back into Galaxy-managed storage
 - cleaning up plaintext intermediates and short-lived key material
 
+Out-of-date note: the 2026-07-14 output-enforcement addendum supersedes the helper's older "selected Galaxy-imported outputs" wording here. Keep this bullet as historical context only; current enforcement must instead follow the full persisted dataset-payload set defined in `docs/superpowers/specs/2026-07-14-crypt4gh-output-enforcement-spec.md`.
+
 ### Chosen execution strategy
 
 Use one **shared metadata-driven execution model** behind `remote_tool_eval.py`:
@@ -176,6 +180,8 @@ Mount-based decrypted views may still be revisited later if they prove operation
 
 ### 5. Output handling
 
+Out-of-date note: this section predates the 2026-07-14 output-enforcement addendum. Retain it for architecture/history, but treat its output-selection language as superseded wherever it narrows scope to "selected Galaxy-imported outputs" or omits explicit `extra_files` coverage and a universal pre-success verifier over persisted payloads.
+
 Tool outputs are treated as plaintext intermediates within the job-local crypto workspace.
 
 Selection rule for this slice:
@@ -236,6 +242,8 @@ If additional metadata becomes necessary beyond the existing Crypt4GH metadata f
 
 The implementation should prefer reusing these existing controls over inventing a second planning/configuration layer.
 
+Out-of-date note: the job-level trigger described above is still relevant as the way a job becomes a Crypt4GH job, but the 2026-07-14 addendum supersedes the older phrasing that treated only "Galaxy-imported dataset artifacts" as the effective output-enforcement target set. For current enforcement semantics, use the addendum's persisted-payload model, including `extra_files` payloads.
+
 ### Compute-key expiry policy
 
 - this slice does not introduce a renewal mechanism for B-issued compute keys
@@ -259,6 +267,8 @@ Responsibilities of the non-Pulsar adapter:
 - encrypt selected Galaxy-imported outputs to the B-managed temporary compute public key
 - ask B to rewrite those output headers to the stored user public key
 - clean up plaintext and short-lived keys
+
+Out-of-date note: this responsibility list uses the pre-addendum shorthand "selected Galaxy-imported outputs." Keep it as historical design wording only; current output-enforcement scope is defined by the 2026-07-14 addendum's full persisted-payload contract.
 
 This is the best first shared Galaxy-side execution hook identified by the findings and avoids the old orchestrator-side `_apply_crypt4gh_staging()` model.
 
@@ -390,6 +400,8 @@ The current implementation contains orchestrator-side code that should not survi
 
 The design should fail closed.
 
+Out-of-date note: this section remains directionally correct, but the 2026-07-14 output-enforcement addendum tightens it further. In particular, fail-closed behavior now includes a universal pre-success verifier over all persisted payload candidates, not only the output re-encryption cases called out below.
+
 Required failure behavior:
 
 - expired or unknown compute-side key id -> fail before tool launch
@@ -404,6 +416,8 @@ Preferred failure outcome: the tool never receives unauthorized plaintext, even 
 ## Acceptance tests
 
 The first tracer bullet should be integration-first and non-Pulsar-first.
+
+Out-of-date note: the acceptance tests below capture the earlier architecture slice, but output-enforcement coverage is incomplete relative to the 2026-07-14 addendum. In particular, the addendum adds required coverage for persisted-payload-centric selection, non-pattern discovered outputs, `extra_files`, plaintext allow-list boundaries, and verifier-driven fail-closed behavior.
 
 ### Tracer bullet acceptance test 1: non-Pulsar encrypted input execution
 
@@ -420,6 +434,8 @@ When a job starts, then:
 - plaintext exists only inside the job-local crypto workspace
 
 ### Tracer bullet acceptance test 2: encrypted output return
+
+Out-of-date note: this test's "all Galaxy-imported dataset outputs" wording is superseded by the 2026-07-14 addendum's broader persisted-payload model.
 
 Given the same job,
 
