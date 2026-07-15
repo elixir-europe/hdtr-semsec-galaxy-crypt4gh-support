@@ -269,6 +269,7 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             model_persistence_context=self,
             primary_data=primary_data,
             filename=filename,
+            extra_files_path=extra_files,
         )
         if crypt4gh_finalized:
             effective_dataset_attributes["clear_crypt4gh_compute_keypair"] = True
@@ -689,6 +690,7 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
     model_persistence_context: ModelPersistenceContext,
     primary_data: Any,
     filename: str,
+    extra_files_path: Optional[str] = None,
 ) -> bool:
     extension = str(getattr(primary_data, "extension", "") or "")
     if not extension.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
@@ -746,6 +748,10 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
         encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted") if isinstance(dataset_id, int) else "",
         designation=designation,
         discovered_marker_map_path=str(marker_dir / "discovered_designations.json"),
+        extra_files_output_path=str(extra_files_path or ""),
+        extra_files_manifest_path=(
+            str(marker_dir / f"ds_{dataset_id}.extra_files_manifest.json") if isinstance(dataset_id, int) else ""
+        ),
         clear_compute_keypair=True,
     )
     return True

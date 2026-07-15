@@ -1377,10 +1377,7 @@ def _verify_discovered_mapping_evidence(
         return
 
     for designation in sorted(discovered_designations):
-        if not any(
-            bool(value) and (key == designation or designation in key)
-            for key, value in merged_mapping.items()
-        ):
+        if not any(bool(value) and key == designation for key, value in merged_mapping.items()):
             diagnostics.append(f"discovered-output mapping missing for designation={designation}")
 
 
