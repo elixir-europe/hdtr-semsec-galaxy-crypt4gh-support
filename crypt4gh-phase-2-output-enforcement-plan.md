@@ -17,6 +17,7 @@
 - Implement the output-enforcement addendum in the Galaxy worktree only.
 - Replace directory-centric and pattern-only assumptions with dataset-centric persisted-payload selection.
 - Route discovered-output enforcement through Galaxy's core discovery/persistence hook instead of a separate Crypt4GH-specific traversal.
+- Remove existing duplicated discovered-output selection/traversal logic that is narrower than core Galaxy discovery/persistence behavior.
 - Cover declared outputs, discovered outputs, and `extra_files` payload files.
 - Emit and verify encryption evidence before success is finalized.
 - Preserve the current plaintext allow-list only for framework/control artifacts and `stdout/stderr`.
@@ -45,6 +46,7 @@
 - Declared-output Crypt4GH finalization remains in place only for non-discovery outputs.
 - Both routes must converge at the same "about-to-persist dataset payload" boundary for evidence and fail-closed verification.
 - The implementation must not keep a narrower parallel Crypt4GH discovered-output selector.
+- Any existing narrower Crypt4GH discovered-output selector or traversal must be removed as part of this slice.
 
 ## Expected file surface
 
@@ -70,7 +72,7 @@
 The implementation should stay TDD-first at the contract level that best protects this slice:
 
 1. Unit tests pin down the shared about-to-persist boundary, including the split between the discovery/persistence hook and the non-discovery declared-output hook.
-2. Integration tests prove the persisted-payload contract end-to-end against the mock compute-side recryptor, including discovery-route encryption before persistence success.
+2. Integration tests prove the persisted-payload contract end-to-end against the mock compute-side recryptor, including discovery-route encryption before persistence success and the absence of duplicate narrower discovered-output routing.
 3. Manual-testing notes are updated only after automated behavior is green.
 
 Minimum final verification for the completed slice:
@@ -95,10 +97,12 @@ Minimum final verification for the completed slice:
 - A unit test proves discovered outputs are sourced from core discovery's matched/persisted payload set, not a separate Crypt4GH selector.
 - A unit or integration test proves a `false_path` / `real_path` divergence case still resolves the payload Galaxy is about to persist.
 - A test proves the non-discovery declared-output hook remains active only for outputs that do not flow through the discovery/persistence route.
+- A test proves any existing Crypt4GH-specific discovered-output traversal path is removed or unreachable for persisted discovered outputs.
 
 - [ ] Write failing unit and integration tests for the shared about-to-persist boundary first.
 - [ ] Verify those tests fail for the current implementation because discovered outputs still imply narrower Crypt4GH-side traversal assumptions.
 - [ ] Introduce or refactor a single boundary contract so discovered outputs enter through `lib/galaxy/model/store/discover.py`, while non-discovery outputs still enter through `lib/galaxy/tools/crypt4gh_remote_execution.py`.
+- [ ] Remove the now-redundant Crypt4GH-specific discovered-output selector/traversal code once the discovery hook owns that route.
 - [ ] Keep the change surgical: the shared boundary should define one persisted-payload contract for later evidence and verifier tasks instead of duplicating discovered-output selection logic.
 - [ ] Re-run the targeted unit/integration tests and get them green.
 - [ ] Perform the mandatory refactor checkpoint for the shared boundary and re-run the same tests.
@@ -123,10 +127,12 @@ Minimum final verification for the completed slice:
 - A discovered-output test proves encryption runs from the discovery/persistence hook before persistence success is finalized.
 - A discovered-output test proves encryption marker evidence is emitted for each persisted discovered payload sourced from the core discovery route.
 - A verifier-oriented test proves missing or invalid discovered-output mapping evidence fails the job with diagnostics that identify the evidence class.
+- A test proves the old narrower Crypt4GH discovered-output path is no longer responsible for selecting persisted discovered payloads.
 
 - [ ] Start with failing tests that exercise discovered outputs through the core discovery/persistence route, not through a separate pattern-regex Crypt4GH pass.
 - [ ] Make the smallest code changes needed so discovered outputs are encrypted at the discovery hook using the matched/persisted payload set Galaxy already decided to persist.
 - [ ] Ensure discovered-output evidence remains readable by Galaxy's metadata/discovery persistence code without introducing a second source of truth for designation mapping or payload selection.
+- [ ] Delete or bypass the obsolete discovered-output traversal code in `lib/galaxy/tools/crypt4gh_remote_execution.py` once the hook-based route is green.
 - [ ] Re-run discovered-output unit/integration coverage until green.
 - [ ] Perform the mandatory refactor checkpoint around discovered-output evidence serialization and re-run the same tests.
 
@@ -219,7 +225,7 @@ The completed implementation must satisfy all six addendum-driven proof cases:
 2. Discovered outputs: non-pattern discovery paths that persist datasets are covered through the discovery/persistence hook.
 3. `extra_files`: payload encryption plus manifest completeness is enforced.
 4. Universal verifier: any missing evidence forces ERROR/fail-closed.
-5. Dataset-centric proof: target selection follows persisted dataset mapping rather than `/outputs` assumptions, with no narrower parallel discovered-output selector.
+5. Dataset-centric proof: target selection follows persisted dataset mapping rather than `/outputs` assumptions, with no narrower parallel discovered-output selector and with obsolete duplicate traversal removed.
 6. Plaintext allow-list: framework/control files remain readable while payload policy still holds.
 
 ## User Check-in markers
@@ -237,5 +243,6 @@ The docs review should specifically confirm:
 - the plan stays within the addendum's output-enforcement slice and does not reopen the broader phase-2 redesign;
 - every required proof case from the addendum is mapped to at least one acceptance test;
 - discovered outputs are routed through the discovery/persistence hook rather than a parallel Crypt4GH traversal;
+- the plan explicitly removes obsolete duplicate discovered-output selection code rather than only forbidding new duplication;
 - `extra_files` and non-pattern discovered outputs are explicit first-class work items, not implied follow-ups;
 - the verifier is defined as a universal pre-success gate over persisted payload candidates.
