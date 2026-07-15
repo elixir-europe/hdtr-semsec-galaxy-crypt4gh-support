@@ -99,6 +99,22 @@ Persisted output payloads include:
 
 If any persisted payload lacks encryption evidence at pre-success verification time, job result MUST fail (ERROR/fail-closed).
 
+## Discovery-route hook and de-duplication intent (normative)
+
+This addendum requires a hook at the discovery/persistence route for discovered outputs.
+
+Required intent:
+
+1. Reuse core discovery’s own matched/persisted payload candidate set.
+2. Encrypt discovered payload candidates before persistence success is finalized (not after DB-commit success handling).
+3. Keep the existing declared-output hook for non-discovery outputs.
+4. Unify both routes at the same "about-to-persist dataset payload" enforcement boundary.
+
+De-duplication objective:
+
+- Crypt4GH output enforcement must not maintain a narrower, parallel discovered-output selector that can diverge from core discovery behavior.
+- Selection semantics for discovered outputs MUST be sourced from the same core discovery/persistence mapping used to decide persisted dataset payloads.
+
 ## Encryption scope and plaintext allow-list
 
 ### Must be encrypted
@@ -122,10 +138,12 @@ If a file is selected for persistence as dataset payload content (primary datase
 ## Enforcement flow (normative)
 
 1. Build candidate payload set from core output/discovery/persistence mapping (dataset-centric, not directory-centric).
-2. Encrypt each candidate payload before persistence success is finalized.
-3. Emit marker/manifest evidence for each encrypted payload.
-4. Run a pre-success fail-closed verifier against persisted payload set.
-5. If verifier fails, force job failure and preserve diagnostics.
+2. For discovered outputs, apply encryption through the discovery/persistence hook before persistence success is finalized.
+3. For non-discovery outputs, retain declared-output hook behavior and apply the same enforcement boundary.
+4. Encrypt each candidate payload before persistence success is finalized.
+5. Emit marker/manifest evidence for each encrypted payload.
+6. Run a pre-success fail-closed verifier against persisted payload set.
+7. If verifier fails, force job failure and preserve diagnostics.
 
 ## Evidence model
 
