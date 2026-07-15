@@ -196,6 +196,69 @@ EOF
 
 ---
 
+## Step 6b — Verify Phase 2 output-enforcement allow-list boundaries (Task 5)
+
+This step validates the current plaintext allow-list behavior after Task 4/5:
+
+- dataset payloads (declared and discovered) must be encrypted (`b"crypt4gh"` magic);
+- framework/control artifacts stay readable plaintext;
+- `stdout/stderr` remain the only payload-adjacent plaintext files in the per-job `outputs/` directory.
+
+1. Run an output-producing tool against a `.c4gh` input (for example `output_format` and
+   `multi_output_assign_primary`).
+2. Capture the job id from the history panel.
+3. Inspect the job working directory.
+
+```bash
+JOB_ID=1   # replace
+JOB_DIR="database/jobs_directory/000/${JOB_ID}"
+
+ls -la "${JOB_DIR}/outputs"
+```
+
+Expected for `${JOB_DIR}/outputs`:
+
+- files include only `tool_stdout` and `tool_stderr`;
+- both are readable text files;
+- neither begins with Crypt4GH magic.
+
+```bash
+python - << 'EOF'
+from pathlib import Path
+
+job_dir = Path("database/jobs_directory/000/1")  # replace job id above if needed
+outputs_dir = job_dir / "outputs"
+files = sorted(p.name for p in outputs_dir.iterdir() if p.is_file())
+print("outputs files:", files)
+assert files == ["tool_stderr", "tool_stdout"], files
+for name in files:
+    p = outputs_dir / name
+    with p.open("rb") as f:
+        magic = f.read(8)
+    print(name, "magic:", magic)
+    assert magic != b"crypt4gh"
+EOF
+```
+
+Then verify payload artifacts are still enforced:
+
+- `_crypt/inputs` and `_crypt/outputs` are removed post-success;
+- `_c4gh_stage/outputs/ds_<dataset_id>.encrypted` exists for each enforced payload;
+- final persisted dataset files begin with `b"crypt4gh"`.
+
+```bash
+find "${JOB_DIR}" -maxdepth 3 -type d -name "_crypt"
+find "${JOB_DIR}/_c4gh_stage/outputs" -maxdepth 1 -name "ds_*.encrypted" -type f
+```
+
+Interpretation:
+
+- `_crypt` directories may exist during execution but should not remain after successful completion.
+- Marker files under `_c4gh_stage/outputs` must remain for verifier/operator evidence.
+- If markers are missing or payloads are plaintext, this is a fail-closed enforcement regression.
+
+---
+
 ## Step 7 — Verify the staging gate behavior
 
 To confirm the gate works, temporarily disable staging and check that the

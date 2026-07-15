@@ -566,6 +566,125 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
             with dataset_path.open("rb") as dataset_stream:
                 assert dataset_stream.read(8) == b"crypt4gh"
 
+    def test_framework_control_artifacts_remain_plaintext_readable_when_payloads_are_enforced(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "output_format",
+            {
+                "input_data_1": {"src": "hda", "id": input_dataset_id},
+                "input_data_2": {"src": "hda", "id": input_dataset_id},
+                "input_text": "not_foo_or_bar",
+            },
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job = sa_session.get(model.Job, job_database_id)
+        assert job is not None
+        direct_output_assoc = next(output_assoc for output_assoc in job.output_datasets if output_assoc.name == "direct_output")
+        direct_output_hda = direct_output_assoc.dataset
+        assert direct_output_hda is not None
+        assert direct_output_hda.dataset is not None
+
+        job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
+        assert job_working_directory is not None
+        working_path = Path(job_working_directory)
+        outputs_dir = working_path / "outputs"
+
+        tool_stdout_path = outputs_dir / "tool_stdout"
+        tool_stderr_path = outputs_dir / "tool_stderr"
+        assert tool_stdout_path.exists() and tool_stdout_path.is_file() and os.access(tool_stdout_path, os.R_OK)
+        assert tool_stderr_path.exists() and tool_stderr_path.is_file() and os.access(tool_stderr_path, os.R_OK)
+        tool_stdout_path.read_text(encoding="utf-8", errors="ignore")
+        tool_stderr_path.read_text(encoding="utf-8", errors="ignore")
+
+        marker_dir = working_path / "_c4gh_stage" / "outputs"
+        output_dataset_table_id = direct_output_hda.dataset.id
+        assert output_dataset_table_id is not None
+        marker_path = marker_dir / f"ds_{output_dataset_table_id}.encrypted"
+        assert marker_path.exists()
+        assert marker_path.read_text().strip().endswith(".c4gh")
+
+        assert not (working_path / "_crypt" / "inputs").exists()
+        assert not (working_path / "_crypt" / "outputs").exists()
+
+        output_dataset_path = Path(direct_output_hda.dataset.get_file_name())
+        with output_dataset_path.open("rb") as output_stream:
+            assert output_stream.read(8) == b"crypt4gh"
+
+    def test_stdout_stderr_are_only_plaintext_files_in_job_outputs_directory(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "output_format",
+            {
+                "input_data_1": {"src": "hda", "id": input_dataset_id},
+                "input_data_2": {"src": "hda", "id": input_dataset_id},
+                "input_text": "not_foo_or_bar",
+            },
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job = sa_session.get(model.Job, job_database_id)
+        assert job is not None
+        direct_output_assoc = next(output_assoc for output_assoc in job.output_datasets if output_assoc.name == "direct_output")
+        direct_output_hda = direct_output_assoc.dataset
+        assert direct_output_hda is not None
+        assert direct_output_hda.dataset is not None
+
+        job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
+        assert job_working_directory is not None
+        outputs_dir = Path(job_working_directory) / "outputs"
+        output_files = sorted(path.name for path in outputs_dir.iterdir() if path.is_file())
+        assert output_files == ["tool_stderr", "tool_stdout"]
+
+        for output_file in output_files:
+            output_path = outputs_dir / output_file
+            with output_path.open("rb") as output_stream:
+                assert output_stream.read(8) != b"crypt4gh"
+
+        output_dataset_path = Path(direct_output_hda.dataset.get_file_name())
+        with output_dataset_path.open("rb") as output_stream:
+            assert output_stream.read(8) == b"crypt4gh"
+
     def test_remote_helper_fails_before_launch_when_stored_ttl_below_threshold(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
