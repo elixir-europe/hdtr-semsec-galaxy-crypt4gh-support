@@ -906,13 +906,24 @@ def finalize_about_to_persist_crypt4gh_payload(
             now=datetime.now(timezone.utc),
         )
 
-    _finalize_output_target(
-        concrete_target=concrete_target,
-        output_path=Path(output_path),
-        reencryption_service_url=reencryption_service_url,
-        compute_public_key=compute_public_key,
-        compute_keypair_id=compute_keypair_id,
-    )
+    resolved_target = (concrete_target, Path(output_path))
+    try:
+        _finalize_output_target(
+            concrete_target=concrete_target,
+            output_path=Path(output_path),
+            reencryption_service_url=reencryption_service_url,
+            compute_public_key=compute_public_key,
+            compute_keypair_id=compute_keypair_id,
+        )
+        _finalize_extra_files_payloads(
+            concrete_target=concrete_target,
+            reencryption_service_url=reencryption_service_url,
+            compute_public_key=compute_public_key,
+            compute_keypair_id=compute_keypair_id,
+        )
+    except Exception:
+        _purge_output_targets_after_finalization_failure([resolved_target])
+        raise
 
 
 def _purge_output_targets_after_finalization_failure(

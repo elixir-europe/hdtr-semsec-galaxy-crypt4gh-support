@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import socket
 import threading
@@ -566,6 +567,76 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
             with dataset_path.open("rb") as dataset_stream:
                 assert dataset_stream.read(8) == b"crypt4gh"
 
+    def test_discovered_dataset_extra_files_are_encrypted_and_manifested_for_crypt4gh_jobs(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "tool_provided_metadata_12",
+            {"input": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+
+        history_contents = self.dataset_populator.get_history_contents(history_id)
+        sample_entry = next(
+            item
+            for item in history_contents
+            if item["history_content_type"] == "dataset" and item.get("name") == "cool name 1"
+        )
+
+        sample_hda = sa_session.get(model.HistoryDatasetAssociation, self._app.security.decode_id(sample_entry["id"]))
+        assert sample_hda is not None and sample_hda.dataset is not None
+
+        sample_details = self.dataset_populator.get_history_dataset_details(history_id, dataset_id=sample_entry["id"])
+        assert sample_details["extension"].endswith(".c4gh"), sample_details
+
+        dataset_path = Path(sample_hda.dataset.get_file_name())
+        with dataset_path.open("rb") as dataset_stream:
+            assert dataset_stream.read(8) == b"crypt4gh"
+
+        dataset_id = sample_hda.dataset.id
+        assert dataset_id is not None
+        extra_files_path = Path(sample_hda.dataset.extra_files_path)
+        with (extra_files_path / "foo").open("rb") as extra_stream:
+            assert extra_stream.read(8) == b"crypt4gh"
+        with (extra_files_path / "bar").open("rb") as extra_stream:
+            assert extra_stream.read(8) == b"crypt4gh"
+
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job = sa_session.get(model.Job, job_database_id)
+        assert job is not None
+        job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
+        assert job_working_directory is not None
+        marker_dir = Path(job_working_directory) / "_c4gh_stage" / "outputs"
+        assert marker_dir.exists(), marker_dir
+
+        manifest_path = marker_dir / f"ds_{dataset_id}.extra_files_manifest.json"
+        assert manifest_path.exists(), manifest_path
+        manifest_payload = json.loads(manifest_path.read_text())
+        assert sorted(manifest_payload["files"].keys()) == ["bar", "foo"]
+
+        designation_map_path = marker_dir / "discovered_designations.json"
+        assert designation_map_path.exists(), designation_map_path
+        designation_payload = json.loads(designation_map_path.read_text())
+        assert designation_payload.get("sample1", "").endswith(".c4gh")
+
     def test_framework_control_artifacts_remain_plaintext_readable_when_payloads_are_enforced(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
@@ -762,4 +833,4 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
 instance = integration_util.integration_module_instance(TestCrypt4GHRemoteExecutionIntegration)
 
-test_tools = integration_util.integration_tool_runner(["inheritance_simple", "output_format"])
+test_tools = integration_util.integration_tool_runner(["inheritance_simple", "output_format", "tool_provided_metadata_12"])
