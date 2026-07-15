@@ -132,7 +132,7 @@ Minimum final verification for the completed slice:
 - [ ] Start with failing tests that exercise discovered outputs through the core discovery/persistence route, not through a separate pattern-regex Crypt4GH pass.
 - [ ] Make the smallest code changes needed so discovered outputs are encrypted at the discovery hook using the matched/persisted payload set Galaxy already decided to persist.
 - [ ] Ensure discovered-output evidence remains readable by Galaxy's metadata/discovery persistence code without introducing a second source of truth for designation mapping or payload selection.
-- [ ] Delete or bypass the obsolete discovered-output traversal code in `lib/galaxy/tools/crypt4gh_remote_execution.py` once the hook-based route is green.
+- [ ] Remove the obsolete discovered-output traversal code in `lib/galaxy/tools/crypt4gh_remote_execution.py` once the hook-based route is green; if a brief unreachable transition is required during the refactor, remove that unreachable code in this same slice before the task is complete.
 - [ ] Re-run discovered-output unit/integration coverage until green.
 - [ ] Perform the mandatory refactor checkpoint around discovered-output evidence serialization and re-run the same tests.
 
