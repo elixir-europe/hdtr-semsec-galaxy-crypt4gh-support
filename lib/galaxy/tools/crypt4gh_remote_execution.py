@@ -40,8 +40,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from dateutil.parser import isoparse
 import aiohttp
-
-from galaxy.job_execution.compute_environment import SharedComputeEnvironment
+from galaxy.job_execution.compute_environment import (
+    dataset_path_to_extra_path,
+    SharedComputeEnvironment,
+)
 
 try:
     import truststore as _optional_truststore
@@ -271,6 +273,8 @@ class _DeclaredCrypt4GHOutputTarget:
     association_name: str
     output_path: str
     dataset_output_path: Optional[str]
+    extra_files_output_path: Optional[str]
+    extra_files_manifest_path: Optional[str]
     plaintext_path: str
     encrypted_marker_path: str
     encrypted_ext: str
@@ -737,6 +741,9 @@ def collect_declared_crypt4gh_output_targets(
             association_name=output_name,
             output_path=output_path,
             dataset_output_path=cast(Optional[str], getattr(dataset_path, "real_path", None)),
+            extra_files_output_path=cast(Optional[str], getattr(dataset_path, "false_extra_files_path", None))
+            or dataset_path_to_extra_path(output_path),
+            extra_files_manifest_path=str(marker_dir / f"ds_{dataset_id}.extra_files_manifest.json"),
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
             encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
             encrypted_ext=encrypted_ext,
@@ -812,6 +819,10 @@ def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) ->
     }
     if target.dataset_output_path:
         mapping["dataset_output_path"] = target.dataset_output_path
+    if target.extra_files_output_path:
+        mapping["extra_files_output_path"] = target.extra_files_output_path
+    if target.extra_files_manifest_path:
+        mapping["extra_files_manifest_path"] = target.extra_files_manifest_path
     return mapping
 
 
@@ -843,6 +854,12 @@ def finalize_declared_crypt4gh_outputs(
                 compute_public_key=compute_public_key,
                 compute_keypair_id=compute_keypair_id,
             )
+            _finalize_extra_files_payloads(
+                concrete_target=concrete_target,
+                reencryption_service_url=reencryption_service_url,
+                compute_public_key=compute_public_key,
+                compute_keypair_id=compute_keypair_id,
+            )
     except Exception:
         _purge_output_targets_after_finalization_failure(resolved_targets)
         raise
@@ -861,6 +878,8 @@ def finalize_about_to_persist_crypt4gh_payload(
     dataset_output_path: str = "",
     designation: str = "",
     discovered_marker_map_path: str = "",
+    extra_files_output_path: str = "",
+    extra_files_manifest_path: str = "",
     clear_compute_keypair: bool = True,
 ) -> None:
     concrete_target: dict[str, Any] = {
@@ -876,6 +895,10 @@ def finalize_about_to_persist_crypt4gh_payload(
         concrete_target["designation"] = designation
     if discovered_marker_map_path:
         concrete_target["discovered_marker_map_path"] = discovered_marker_map_path
+    if extra_files_output_path:
+        concrete_target["extra_files_output_path"] = extra_files_output_path
+    if extra_files_manifest_path:
+        concrete_target["extra_files_manifest_path"] = extra_files_manifest_path
 
     if compute_keypair_expiration_date:
         _assert_key_valid_for_output_finalization(
@@ -906,6 +929,42 @@ def _purge_output_targets_after_finalization_failure(
                     candidate_path.unlink()
             except Exception:
                 log.exception("Failed to remove plaintext output candidate %s after Crypt4GH finalization failure", candidate_path)
+
+        marker_path_value = str(concrete_target.get("encrypted_marker_path", "") or "")
+        if marker_path_value:
+            marker_path = Path(marker_path_value)
+            try:
+                if marker_path.exists():
+                    marker_path.unlink()
+            except Exception:
+                log.exception(
+                    "Failed to remove encrypted marker %s after Crypt4GH finalization failure",
+                    marker_path,
+                )
+
+        extra_files_output_path_value = str(concrete_target.get("extra_files_output_path", "") or "")
+        if extra_files_output_path_value:
+            extra_files_output_path = Path(extra_files_output_path_value)
+            try:
+                if extra_files_output_path.exists() and extra_files_output_path.is_dir():
+                    shutil.rmtree(extra_files_output_path)
+            except Exception:
+                log.exception(
+                    "Failed to remove plaintext extra_files candidate %s after Crypt4GH finalization failure",
+                    extra_files_output_path,
+                )
+
+        extra_files_manifest_path_value = str(concrete_target.get("extra_files_manifest_path", "") or "")
+        if extra_files_manifest_path_value:
+            extra_files_manifest_path = Path(extra_files_manifest_path_value)
+            try:
+                if extra_files_manifest_path.exists():
+                    extra_files_manifest_path.unlink()
+            except Exception:
+                log.exception(
+                    "Failed to remove extra_files manifest %s after Crypt4GH finalization failure",
+                    extra_files_manifest_path,
+                )
 
 
 def _iter_unique_existing_output_targets(
@@ -1013,6 +1072,12 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, Any]]:
         dataset_output_path = target.get("dataset_output_path")
         if dataset_output_path:
             concrete_target["dataset_output_path"] = str(dataset_output_path)
+        extra_files_output_path = target.get("extra_files_output_path")
+        if extra_files_output_path:
+            concrete_target["extra_files_output_path"] = str(extra_files_output_path)
+        extra_files_manifest_path = target.get("extra_files_manifest_path")
+        if extra_files_manifest_path:
+            concrete_target["extra_files_manifest_path"] = str(extra_files_manifest_path)
         return [concrete_target]
 
     if target.get("discover_pattern") is not None:
@@ -1036,6 +1101,118 @@ def _write_discovered_designation_marker(*, marker_map_path: Path, designation: 
             marker_map = {}
     marker_map[designation] = encrypted_ext
     marker_map_path.write_text(json.dumps(marker_map))
+
+
+def _finalize_extra_files_payloads(
+    *,
+    concrete_target: Mapping[str, Any],
+    reencryption_service_url: str,
+    compute_public_key: str,
+    compute_keypair_id: str,
+) -> None:
+    extra_files_output_path_value = str(concrete_target.get("extra_files_output_path", "") or "")
+    if not extra_files_output_path_value:
+        return
+
+    extra_files_output_path = Path(extra_files_output_path_value)
+    if not extra_files_output_path.exists() or not extra_files_output_path.is_dir():
+        return
+
+    extra_files_manifest_path_value = str(concrete_target.get("extra_files_manifest_path", "") or "")
+    if not extra_files_manifest_path_value:
+        raise Crypt4GHRemoteExecutionError("Crypt4GH extra_files finalization requires an extra_files manifest path")
+
+    extra_files_manifest_path = Path(extra_files_manifest_path_value)
+    if extra_files_manifest_path.exists():
+        extra_files_manifest_path.unlink()
+
+    base_plaintext_path = Path(str(concrete_target["plaintext_path"]))
+    expected_entries: set[str] = set()
+    for root, _dirs, files in os.walk(extra_files_output_path):
+        root_path = Path(root)
+        for file_name in files:
+            source_path = root_path / file_name
+            relative_path = os.path.relpath(source_path, extra_files_output_path)
+            normalized_relative_path = relative_path.replace(os.sep, "/")
+            expected_entries.add(normalized_relative_path)
+
+            extra_file_target = dict(concrete_target)
+            extra_file_target["output_path"] = str(source_path)
+            extra_file_target["plaintext_path"] = str(
+                base_plaintext_path.parent / "extra_files" / normalized_relative_path / "plaintext"
+            )
+            extra_file_target["encrypted_marker_path"] = ""
+            extra_file_target.pop("dataset_output_path", None)
+
+            _finalize_output_target(
+                concrete_target=extra_file_target,
+                output_path=source_path,
+                reencryption_service_url=reencryption_service_url,
+                compute_public_key=compute_public_key,
+                compute_keypair_id=compute_keypair_id,
+            )
+            _write_extra_files_manifest_entry(
+                manifest_path=extra_files_manifest_path,
+                relative_path=normalized_relative_path,
+                encrypted_ext=str(concrete_target["encrypted_ext"]),
+            )
+            _assert_crypt4gh_payload_header(path=source_path)
+
+    _assert_extra_files_manifest_complete(
+        manifest_path=extra_files_manifest_path,
+        expected_entries=expected_entries,
+    )
+
+
+def _write_extra_files_manifest_entry(*, manifest_path: Path, relative_path: str, encrypted_ext: str) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_payload: dict[str, Any] = {"files": {}}
+    if manifest_path.exists():
+        try:
+            loaded_payload = json.loads(manifest_path.read_text())
+            if isinstance(loaded_payload, dict):
+                manifest_payload = loaded_payload
+        except Exception:
+            manifest_payload = {"files": {}}
+
+    files_payload = manifest_payload.get("files")
+    if not isinstance(files_payload, dict):
+        files_payload = {}
+        manifest_payload["files"] = files_payload
+
+    files_payload[relative_path] = encrypted_ext
+    manifest_path.write_text(json.dumps(manifest_payload))
+
+
+def _assert_extra_files_manifest_complete(*, manifest_path: Path, expected_entries: set[str]) -> None:
+    if not expected_entries:
+        return
+
+    if not manifest_path.exists():
+        raise Crypt4GHRemoteExecutionError("Crypt4GH extra_files manifest missing entries")
+
+    try:
+        manifest_payload = json.loads(manifest_path.read_text())
+    except Exception as exc:
+        raise Crypt4GHRemoteExecutionError(
+            f"Crypt4GH extra_files manifest is unreadable: {manifest_path}"
+        ) from exc
+
+    files_payload = manifest_payload.get("files") if isinstance(manifest_payload, dict) else None
+    if not isinstance(files_payload, dict):
+        raise Crypt4GHRemoteExecutionError(
+            f"Crypt4GH extra_files manifest has invalid structure: {manifest_path}"
+        )
+
+    missing_entries = expected_entries - set(files_payload.keys())
+    if missing_entries:
+        raise Crypt4GHRemoteExecutionError("Crypt4GH extra_files manifest missing entries")
+
+
+def _assert_crypt4gh_payload_header(*, path: Path) -> None:
+    with path.open("rb") as payload_stream:
+        if payload_stream.read(8) != b"crypt4gh":
+            raise Crypt4GHRemoteExecutionError(f"Crypt4GH extra_files payload remained plaintext: {path}")
 
 
 def build_crypt4gh_cleanup_wrapped_command(

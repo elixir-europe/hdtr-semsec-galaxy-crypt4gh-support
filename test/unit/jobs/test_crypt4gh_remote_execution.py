@@ -2,6 +2,7 @@ from datetime import (
     datetime,
     timedelta,
 )
+import json
 from pathlib import Path
 import subprocess
 from typing import cast
@@ -1020,6 +1021,189 @@ def test_collect_declared_targets_records_output_association_name(tmp_path):
 
     assert len(targets) == 1
     assert targets[0]["association_name"] == "sample"
+
+
+def test_collect_declared_targets_include_extra_files_manifest_for_dataset(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=15)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, path: str, extra_files_path: str):
+            self.false_path = path
+            self.real_path = path
+            self.false_extra_files_path = extra_files_path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str, extra_files_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path, extra_files_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    output_path = tmp_path / "dataset_15.dat"
+    output_path.write_text("sample\n")
+    extra_files_path = tmp_path / "dataset_15_files"
+    extra_files_path.mkdir(parents=True)
+
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(output_path), str(extra_files_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    assert len(targets) == 1
+    assert targets[0]["extra_files_output_path"] == str(extra_files_path)
+    assert targets[0]["extra_files_manifest_path"].endswith("_c4gh_stage/outputs/ds_15.extra_files_manifest.json")
+
+
+def test_finalize_declared_outputs_encrypts_extra_files_and_writes_manifest(tmp_path, monkeypatch):
+    output_path = tmp_path / "working" / "dataset_22.dat"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    extra_files_root = tmp_path / "working" / "dataset_22_files"
+    (extra_files_root / "nested").mkdir(parents=True, exist_ok=True)
+    (extra_files_root / "foo.txt").write_text("foo\n")
+    (extra_files_root / "nested" / "bar.txt").write_text("bar\n")
+
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    manifest_path = marker_dir / "ds_22.extra_files_manifest.json"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        payload = Path(plaintext_path).read_bytes()
+        Path(compute_encrypted_path).write_bytes(b"crypt4gh" + payload)
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+
+    finalize_declared_crypt4gh_outputs(
+        output_targets=[
+            {
+                "output_path": str(output_path),
+                "plaintext_path": str(tmp_path / "_crypt" / "outputs" / "ds_22" / "plaintext"),
+                "encrypted_marker_path": str(marker_dir / "ds_22.encrypted"),
+                "encrypted_ext": "tabular.c4gh",
+                "extra_files_output_path": str(extra_files_root),
+                "extra_files_manifest_path": str(manifest_path),
+            }
+        ],
+        reencryption_service_url="http://example.invalid",
+        compute_public_key="unused",
+        compute_keypair_id="unused",
+    )
+
+    with output_path.open("rb") as output_stream:
+        assert output_stream.read(8) == b"crypt4gh"
+
+    with (extra_files_root / "foo.txt").open("rb") as extra_stream:
+        assert extra_stream.read(8) == b"crypt4gh"
+    with (extra_files_root / "nested" / "bar.txt").open("rb") as extra_stream:
+        assert extra_stream.read(8) == b"crypt4gh"
+
+    manifest_payload = json.loads(manifest_path.read_text())
+    assert sorted(manifest_payload["files"].keys()) == ["foo.txt", "nested/bar.txt"]
+
+
+def test_finalize_declared_outputs_fail_closed_when_extra_files_manifest_missing_entries(tmp_path, monkeypatch):
+    output_path = tmp_path / "working" / "dataset_23.dat"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    extra_files_root = tmp_path / "working" / "dataset_23_files"
+    extra_files_root.mkdir(parents=True, exist_ok=True)
+    (extra_files_root / "foo.txt").write_text("foo\n")
+
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    manifest_path = marker_dir / "ds_23.extra_files_manifest.json"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        payload = Path(plaintext_path).read_bytes()
+        Path(compute_encrypted_path).write_bytes(b"crypt4gh" + payload)
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    def _drop_manifest_entry(*, manifest_path, relative_path, encrypted_ext):
+        del relative_path
+        del encrypted_ext
+        Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(manifest_path).write_text(json.dumps({"files": {}}))
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._write_extra_files_manifest_entry",
+        _drop_manifest_entry,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="extra_files manifest missing entries"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "_crypt" / "outputs" / "ds_23" / "plaintext"),
+                    "encrypted_marker_path": str(marker_dir / "ds_23.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "extra_files_output_path": str(extra_files_root),
+                    "extra_files_manifest_path": str(manifest_path),
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
 
 
 def test_discovered_crypt4gh_metadata_path_clears_compute_keypair_without_generic_set_meta(monkeypatch):
