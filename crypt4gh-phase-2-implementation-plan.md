@@ -26,7 +26,7 @@
 
 ## Output-enforcement alignment with the 2026-07-14 addendum
 
-- Binding addendum for this topic: `docs/superpowers/specs/2026-07-14-crypt4gh-output-enforcement-spec.md`
+- Binding addendum for this topic: `crypt4gh-phase-2-output-enforcement-spec.md`
 - For output-enforcement semantics, the addendum is authoritative and overrides conflicting wording in this plan.
 - Superseded / no-longer-authoritative assumptions from the earlier plan text:
   - Any wording that narrows output scope to only “selected Galaxy-imported outputs”. The required final scope is all persisted payloads for Crypt4GH jobs: declared outputs, discovered outputs, and associated `extra_files` payloads.

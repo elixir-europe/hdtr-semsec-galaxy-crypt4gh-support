@@ -31,7 +31,7 @@
 
 ## Binding inputs and precedence
 
-- Primary authority for this slice: `2026-07-14-crypt4gh-output-enforcement-spec.md`
+- Primary authority for this slice: `crypt4gh-phase-2-output-enforcement-spec.md`
 - Historical context only where non-conflicting:
   - `crypt4gh-phase-2-implementation-plan.md`
   - `crypt4gh-phase-2-reimplementation-design.md`
