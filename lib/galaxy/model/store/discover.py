@@ -646,6 +646,9 @@ def _resolve_discovered_crypt4gh_extension(*, ext: str, job_working_directory: s
     if marker_dir is None:
         return ext
 
+    if ext == CRYPT4GH_DEFAULT_EXT or ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
+        return ext
+
     datatypes_registry = galaxy.model._get_datatypes_registry()
     encrypted_ext = f"{ext}.{CRYPT4GH_DEFAULT_EXT}"
     if datatypes_registry.get_datatype_by_extension(encrypted_ext) is not None:

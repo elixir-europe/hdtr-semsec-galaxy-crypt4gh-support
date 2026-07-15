@@ -1,8 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
 
-from galaxy.model.store.discover import _maybe_finalize_crypt4gh_about_to_persist_payload
+from galaxy.model.store.discover import (
+    _maybe_finalize_crypt4gh_about_to_persist_payload,
+    _resolve_discovered_crypt4gh_extension,
+)
 
 
 def test_about_to_persist_finalization_allows_missing_dataset_id_when_designation_present(tmp_path, monkeypatch):
@@ -77,3 +81,49 @@ def test_about_to_persist_finalization_fails_closed_when_dataset_id_and_designat
             primary_data=primary_data,
             filename=str(output_path),
         )
+
+
+class _RegistryForExtensionResolution:
+    def __init__(self):
+        self.created_from: list[str] = []
+
+    def get_datatype_by_extension(self, extension: str):
+        return None
+
+    def get_or_create_crypt4gh_datatype(self, extension: str):
+        self.created_from.append(extension)
+        return object()
+
+
+def test_resolve_discovered_extension_keeps_already_encrypted_extension(monkeypatch):
+    registry = _RegistryForExtensionResolution()
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._first_existing_crypt4gh_marker_directory",
+        lambda **kwargs: "/tmp/marker-dir",
+    )
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular.c4gh",
+        job_working_directory="/tmp/job-dir",
+    )
+
+    assert resolved == "tabular.c4gh"
+    assert registry.created_from == []
+
+
+def test_resolve_discovered_extension_keeps_generic_crypt4gh_extension(monkeypatch):
+    registry = _RegistryForExtensionResolution()
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._first_existing_crypt4gh_marker_directory",
+        lambda **kwargs: "/tmp/marker-dir",
+    )
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext=CRYPT4GH_DEFAULT_EXT,
+        job_working_directory="/tmp/job-dir",
+    )
+
+    assert resolved == CRYPT4GH_DEFAULT_EXT
+    assert registry.created_from == []
