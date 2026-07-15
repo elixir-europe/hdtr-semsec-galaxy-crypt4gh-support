@@ -7,8 +7,10 @@ corresponding to files in other contexts.
 """
 
 import abc
+import hashlib
 import logging
 import os
+from pathlib import Path
 from collections.abc import (
     Callable,
     Iterable,
@@ -260,6 +262,17 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             primary_data.dataset.file_size = 0
             primary_data.dataset.total_size = 0
             return
+
+        effective_dataset_attributes = dict(dataset_attributes or {})
+
+        crypt4gh_finalized = _maybe_finalize_crypt4gh_about_to_persist_payload(
+            model_persistence_context=self,
+            primary_data=primary_data,
+            filename=filename,
+        )
+        if crypt4gh_finalized:
+            effective_dataset_attributes["clear_crypt4gh_compute_keypair"] = True
+
         # Move data from temp location to dataset location
         if not link_data:
             dataset = primary_data.dataset
@@ -284,7 +297,10 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             self.permission_provider.set_default_hda_permissions(primary_data)
 
         # TODO: this might run set_meta after copying the file to the object store, which could be inefficient if job working directory is closer to the node.
-        self.set_datasets_metadata(datasets=[primary_data], datasets_attributes=[dataset_attributes])
+        self.set_datasets_metadata(datasets=[primary_data], datasets_attributes=[effective_dataset_attributes])
+
+    def crypt4gh_output_finalization_context(self) -> Optional[dict[str, str]]:
+        return None
 
     @staticmethod
     def set_datasets_metadata(datasets, datasets_attributes=None):
@@ -663,6 +679,73 @@ def _crypt4gh_marker_directories(*, job_working_directory: str) -> list[str]:
     if parent_working_directory and parent_working_directory != working_directory_str:
         candidate_directories.append(os.path.join(parent_working_directory, "_c4gh_stage", "outputs"))
     return candidate_directories
+
+
+def _maybe_finalize_crypt4gh_about_to_persist_payload(
+    *,
+    model_persistence_context: ModelPersistenceContext,
+    primary_data: Any,
+    filename: str,
+) -> bool:
+    extension = str(getattr(primary_data, "extension", "") or "")
+    if not extension.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
+        return False
+
+    context = model_persistence_context.crypt4gh_output_finalization_context()
+    if not context:
+        return False
+
+    reencryption_service_url = str(context.get("reencryption_service_url", "") or "")
+    compute_public_key = str(context.get("compute_public_key", "") or "")
+    compute_keypair_id = str(context.get("compute_keypair_id", "") or "")
+    if not reencryption_service_url or not compute_public_key or not compute_keypair_id:
+        raise RuntimeError("Crypt4GH discovered-output finalization context is incomplete")
+
+    output_path = os.path.abspath(os.fspath(filename))
+    if not os.path.isfile(output_path):
+        raise RuntimeError(f"Crypt4GH discovered output path does not exist: {output_path}")
+
+    dataset_object = getattr(primary_data, "dataset", None)
+    dataset_id = getattr(dataset_object, "id", None)
+    designation = str(getattr(primary_data, "designation", "") or "")
+    if not isinstance(dataset_id, int) and not designation:
+        raise RuntimeError("Crypt4GH discovered output is missing both persisted dataset id and designation")
+
+    job_working_directory = os.fspath(
+        getattr(primary_data, "job_working_directory", model_persistence_context.job_working_directory)
+    )
+    marker_dir = Path(job_working_directory) / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset_output_path = ""
+    if dataset_object is not None:
+        get_file_name = getattr(dataset_object, "get_file_name", None)
+        if callable(get_file_name):
+            try:
+                dataset_output_path = str(get_file_name(sync_cache=False) or "")
+            except TypeError:
+                dataset_output_path = str(get_file_name() or "")
+
+    plaintext_marker_id = f"ds_{dataset_id}" if isinstance(dataset_id, int) else f"path_{hashlib.sha256(output_path.encode('utf-8')).hexdigest()[:16]}"
+    plaintext_path = Path(job_working_directory) / "_crypt" / "outputs" / plaintext_marker_id / "plaintext"
+
+    from galaxy.tools.crypt4gh_remote_execution import finalize_about_to_persist_crypt4gh_payload
+
+    finalize_about_to_persist_crypt4gh_payload(
+        output_path=output_path,
+        dataset_output_path=dataset_output_path,
+        plaintext_path=str(plaintext_path),
+        encrypted_ext=extension,
+        reencryption_service_url=reencryption_service_url,
+        compute_public_key=compute_public_key,
+        compute_keypair_id=compute_keypair_id,
+        compute_keypair_expiration_date=str(context.get("compute_keypair_expiration_date", "") or "") or None,
+        encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted") if isinstance(dataset_id, int) else "",
+        designation=designation,
+        discovered_marker_map_path=str(marker_dir / "discovered_designations.json"),
+        clear_compute_keypair=True,
+    )
+    return True
 
 
 class PermissionProvider(metaclass=abc.ABCMeta):

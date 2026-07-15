@@ -16,6 +16,7 @@ from galaxy.tools.crypt4gh_remote_execution import (
     collect_declared_crypt4gh_output_targets,
     CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER,
     Crypt4GHRemoteExecutionError,
+    finalize_about_to_persist_crypt4gh_payload,
     finalize_declared_crypt4gh_outputs,
     should_run_crypt4gh_remote_execution,
 )
@@ -564,6 +565,23 @@ def test_finalize_discovered_outputs_writes_path_markers(tmp_path, monkeypatch):
     assert all(marker.read_text() == "txt.c4gh\n" for marker in marker_files)
 
 
+
+def test_finalize_declared_outputs_rejects_legacy_discovered_selector_targets(tmp_path):
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="explicit output_path"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "discover_pattern": r".+\\.txt",
+                    "discover_directory": str(tmp_path / "discover"),
+                    "encrypted_ext": "txt.c4gh",
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+
 def test_collect_declared_targets_includes_new_primary_discovered_outputs(tmp_path):
     class _OutputDataset:
         def __init__(self):
@@ -612,10 +630,7 @@ def test_collect_declared_targets_includes_new_primary_discovered_outputs(tmp_pa
         working_directory=str(tmp_path),
     )
 
-    assert len(targets) == 1
-    assert targets[0]["output_path"] == str(output_path)
-    assert targets[0]["encrypted_ext"] == "tabular.c4gh"
-    assert targets[0]["encrypted_marker_path"] == str(tmp_path / "_c4gh_stage" / "outputs" / "ds_4.encrypted")
+    assert targets == []
 
 
 def test_collect_declared_targets_fails_closed_when_tool_output_lookup_is_missing(tmp_path):
@@ -752,7 +767,7 @@ def test_collect_declared_targets_fails_closed_when_base_extension_cannot_be_res
         )
 
 
-def test_collect_declared_targets_fails_closed_when_discovered_collector_is_not_pattern(tmp_path):
+def test_collect_declared_targets_ignores_legacy_discovered_collectors(tmp_path):
     class _OutputDataset:
         def __init__(self):
             self.dataset = _DatasetWrapper(dataset_id=4)
@@ -796,13 +811,68 @@ def test_collect_declared_targets_fails_closed_when_discovered_collector_is_not_
         from_work_dir = None
         dataset_collector_descriptions = [_Collector()]
 
-    with pytest.raises(Crypt4GHRemoteExecutionError, match="requires pattern-based collectors"):
-        collect_declared_crypt4gh_output_targets(
-            job_io=_OutputJobIO(str(output_path)),
-            tool_outputs={"sample": _ToolOutput()},
-            datatypes_registry=_DatatypesRegistry(),
-            working_directory=str(tmp_path),
-        )
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(output_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    assert len(targets) == 1
+    assert "discover_pattern" not in targets[0]
+
+
+def test_collect_declared_targets_prefers_false_path_and_tracks_real_path(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=42)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, false_path: str, real_path: str):
+            self.false_path = false_path
+            self.real_path = real_path
+
+    class _OutputJobIO:
+        def __init__(self, false_path: str, real_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(false_path, real_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    false_path = tmp_path / "working" / "dataset_42.dat"
+    false_path.parent.mkdir(parents=True, exist_ok=True)
+    false_path.write_text("sample\n")
+    real_path = tmp_path / "object_store" / "dataset_42.dat"
+    real_path.parent.mkdir(parents=True, exist_ok=True)
+    real_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(false_path), str(real_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    assert len(targets) == 1
+    assert targets[0]["output_path"] == str(false_path)
+    assert targets[0]["dataset_output_path"] == str(real_path)
 
 
 def test_finalize_declared_outputs_fails_closed_when_declared_output_path_is_missing(tmp_path):
@@ -902,6 +972,54 @@ def test_collect_declared_targets_marks_outputs_for_compute_keypair_clearance(tm
     )
 
     assert targets[0]["clear_compute_keypair"] is True
+
+
+def test_collect_declared_targets_records_output_association_name(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=9)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    output_path = tmp_path / "dataset_9.dat"
+    output_path.write_text("sample\n")
+
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(output_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    assert len(targets) == 1
+    assert targets[0]["association_name"] == "sample"
 
 
 def test_discovered_crypt4gh_metadata_path_clears_compute_keypair_without_generic_set_meta(monkeypatch):
@@ -1047,3 +1165,51 @@ def test_finalize_declared_outputs_deletes_unprocessed_plaintext_outputs_when_an
 
     assert not first_output_path.exists()
     assert not second_output_path.exists()
+
+
+def test_finalize_about_to_persist_payload_writes_discovered_designation_map(tmp_path, monkeypatch):
+    output_path = tmp_path / "discover" / "sample1.tsv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("sample\n")
+
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    map_path = marker_dir / "discovered_designations.json"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        Path(compute_encrypted_path).write_bytes(Path(plaintext_path).read_bytes())
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+
+    finalize_about_to_persist_crypt4gh_payload(
+        output_path=str(output_path),
+        plaintext_path=str(tmp_path / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+        encrypted_ext="tabular.c4gh",
+        reencryption_service_url="http://example.invalid",
+        compute_public_key="unused",
+        compute_keypair_id="unused",
+        encrypted_marker_path=str(marker_dir / "ds_1.encrypted"),
+        designation="sample1",
+        discovered_marker_map_path=str(map_path),
+    )
+
+    assert map_path.exists()
+    assert map_path.read_text() == '{"sample1": "tabular.c4gh"}'

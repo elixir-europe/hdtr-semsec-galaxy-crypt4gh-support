@@ -268,6 +268,7 @@ class _RecryptToJobKeyResult:
 
 @dataclass(frozen=True)
 class _DeclaredCrypt4GHOutputTarget:
+    association_name: str
     output_path: str
     dataset_output_path: Optional[str]
     plaintext_path: str
@@ -686,7 +687,7 @@ def collect_declared_crypt4gh_output_targets(
     datatypes_registry: Any,
     working_directory: str,
 ) -> list[dict[str, Any]]:
-    """Collect declared and discovered outputs that require Crypt4GH finalization."""
+    """Collect declared non-discovery outputs that require Crypt4GH finalization."""
 
     targets: list[dict[str, Any]] = []
     marker_dir = Path(working_directory) / "_c4gh_stage" / "outputs"
@@ -694,6 +695,9 @@ def collect_declared_crypt4gh_output_targets(
     tool_working_directory = Path(working_directory) / "working"
 
     for output_name, (dataset, dataset_path) in job_io.get_output_hdas_and_fnames().items():
+        if output_name.startswith("__new_primary_file_"):
+            continue
+
         output_name_for_tool_lookup = _resolve_output_name_for_tool_lookup(
             output_name=output_name,
             tool_outputs=tool_outputs,
@@ -710,6 +714,9 @@ def collect_declared_crypt4gh_output_targets(
             )
 
         tool_output = tool_outputs.get(output_name_for_tool_lookup)
+        if _is_discovery_routed_output(tool_output):
+            continue
+
         base_ext = _resolve_base_output_extension(dataset=dataset, tool_output=tool_output)
         if base_ext is None:
             raise Crypt4GHRemoteExecutionError(
@@ -727,6 +734,7 @@ def collect_declared_crypt4gh_output_targets(
         )
 
         target = _DeclaredCrypt4GHOutputTarget(
+            association_name=output_name,
             output_path=output_path,
             dataset_output_path=cast(Optional[str], getattr(dataset_path, "real_path", None)),
             plaintext_path=str(plaintext_root / f"ds_{dataset_id}" / "plaintext"),
@@ -736,21 +744,14 @@ def collect_declared_crypt4gh_output_targets(
         )
         targets.append(_declared_output_target_to_mapping(target))
 
-        if output_name.startswith("__new_primary_file_"):
-            continue
-
-        targets.extend(
-            _collect_discovered_output_targets(
-                tool_output=tool_output,
-                tool_working_directory=tool_working_directory,
-                marker_dir=marker_dir,
-                dataset_id=dataset_id,
-                plaintext_root=plaintext_root,
-                encrypted_ext=encrypted_ext,
-            )
-        )
-
     return targets
+
+
+def _is_discovery_routed_output(tool_output: Any) -> bool:
+    if tool_output is None:
+        return False
+    collectors = list(getattr(tool_output, "dataset_collector_descriptions", []) or [])
+    return any(bool(getattr(collector, "assign_primary_output", False)) for collector in collectors)
 
 
 def _resolve_output_name_for_tool_lookup(*, output_name: str, tool_outputs: Mapping[str, Any]) -> Optional[str]:
@@ -802,6 +803,7 @@ def _resolve_output_path(*, dataset_path: Any, tool_output: Any, tool_working_di
 
 def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, Any]:
     mapping = {
+        "association_name": target.association_name,
         "output_path": target.output_path,
         "plaintext_path": target.plaintext_path,
         "encrypted_marker_path": target.encrypted_marker_path,
@@ -811,42 +813,6 @@ def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) ->
     if target.dataset_output_path:
         mapping["dataset_output_path"] = target.dataset_output_path
     return mapping
-
-
-def _collect_discovered_output_targets(
-    *,
-    tool_output: Any,
-    tool_working_directory: Path,
-    marker_dir: Path,
-    dataset_id: int,
-    plaintext_root: Path,
-    encrypted_ext: str,
-) -> list[dict[str, Any]]:
-    discovered_targets: list[dict[str, Any]] = []
-    dataset_collectors = list(getattr(tool_output, "dataset_collector_descriptions", [])) if tool_output else []
-    for collector in dataset_collectors:
-        discover_via = getattr(collector, "discover_via", None)
-        if discover_via != "pattern":
-            raise Crypt4GHRemoteExecutionError(
-                f"Crypt4GH output discovery requires pattern-based collectors; found discover_via={discover_via!r}"
-            )
-
-        collector_directory = Path(str(getattr(collector, "directory", "") or ""))
-        discover_directory = (
-            str(collector_directory) if collector_directory.is_absolute() else str(tool_working_directory / collector_directory)
-        )
-        discovered_targets.append(
-            {
-                "discover_pattern": str(getattr(collector, "pattern", "")),
-                "discover_directory": discover_directory,
-                "assign_primary_output": bool(getattr(collector, "assign_primary_output", False)),
-                "primary_encrypted_marker_path": str(marker_dir / f"ds_{dataset_id}.encrypted"),
-                "marker_dir": str(marker_dir),
-                "discovered_plaintext_root": str(plaintext_root / "discovered"),
-                "encrypted_ext": encrypted_ext,
-            }
-        )
-    return discovered_targets
 
 
 def finalize_declared_crypt4gh_outputs(
@@ -880,6 +846,50 @@ def finalize_declared_crypt4gh_outputs(
     except Exception:
         _purge_output_targets_after_finalization_failure(resolved_targets)
         raise
+
+
+def finalize_about_to_persist_crypt4gh_payload(
+    *,
+    output_path: str,
+    plaintext_path: str,
+    encrypted_ext: str,
+    reencryption_service_url: str,
+    compute_public_key: str,
+    compute_keypair_id: str,
+    compute_keypair_expiration_date: Optional[str] = None,
+    encrypted_marker_path: str = "",
+    dataset_output_path: str = "",
+    designation: str = "",
+    discovered_marker_map_path: str = "",
+    clear_compute_keypair: bool = True,
+) -> None:
+    concrete_target: dict[str, Any] = {
+        "output_path": output_path,
+        "plaintext_path": plaintext_path,
+        "encrypted_ext": encrypted_ext,
+        "encrypted_marker_path": encrypted_marker_path,
+        "clear_compute_keypair": clear_compute_keypair,
+    }
+    if dataset_output_path:
+        concrete_target["dataset_output_path"] = dataset_output_path
+    if designation:
+        concrete_target["designation"] = designation
+    if discovered_marker_map_path:
+        concrete_target["discovered_marker_map_path"] = discovered_marker_map_path
+
+    if compute_keypair_expiration_date:
+        _assert_key_valid_for_output_finalization(
+            compute_keypair_expiration_date=compute_keypair_expiration_date,
+            now=datetime.now(timezone.utc),
+        )
+
+    _finalize_output_target(
+        concrete_target=concrete_target,
+        output_path=Path(output_path),
+        reencryption_service_url=reencryption_service_url,
+        compute_public_key=compute_public_key,
+        compute_keypair_id=compute_keypair_id,
+    )
 
 
 def _purge_output_targets_after_finalization_failure(
@@ -1005,58 +1015,13 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, Any]]:
             concrete_target["dataset_output_path"] = str(dataset_output_path)
         return [concrete_target]
 
-    discover_pattern = target.get("discover_pattern")
-    if not discover_pattern:
-        return []
-
-    discover_directory = Path(str(target.get("discover_directory", "")))
-    if not discover_directory.exists() or not discover_directory.is_dir():
-        return []
-
-    try:
-        matcher = re.compile(str(discover_pattern))
-    except re.error as exc:
-        raise Crypt4GHRemoteExecutionError(f"Invalid discovered output pattern: {discover_pattern}") from exc
-
-    discovered_paths = sorted(
-        path
-        for path in discover_directory.iterdir()
-        if path.is_file() and matcher.match(path.name)
-    )
-    assign_primary_output = bool(target.get("assign_primary_output", False))
-    primary_marker_path = str(target.get("primary_encrypted_marker_path", ""))
-    marker_dir = str(target.get("marker_dir", ""))
-    discovered_plaintext_root = str(target.get("discovered_plaintext_root", ""))
-    discovered_marker_map_path = str(Path(marker_dir) / "discovered_designations.json") if marker_dir else ""
-    encrypted_ext = str(target["encrypted_ext"])
-
-    targets: list[dict[str, Any]] = []
-    for index, discovered_path in enumerate(discovered_paths):
-        match = matcher.match(discovered_path.name)
-        designation = ""
-        if match:
-            designation = str(match.groupdict().get("designation") or "")
-        marker_path = ""
-        if assign_primary_output and index == 0 and primary_marker_path:
-            marker_path = primary_marker_path
-        elif marker_dir:
-            marker_path = str(Path(marker_dir) / f"path_{index}.encrypted")
-        if discovered_plaintext_root:
-            plaintext_path = str(Path(discovered_plaintext_root) / f"path_{index}.plaintext")
-        else:
-            plaintext_path = str(Path(f"{discovered_path}.plaintext"))
-        targets.append(
-            {
-                "output_path": str(discovered_path),
-                "plaintext_path": plaintext_path,
-                "encrypted_ext": encrypted_ext,
-                "encrypted_marker_path": marker_path,
-                "designation": designation,
-                "discovered_marker_map_path": discovered_marker_map_path,
-                "clear_compute_keypair": bool(target.get("clear_compute_keypair", False)),
-            }
+    if target.get("discover_pattern") is not None:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH declared output finalization requires explicit output_path targets; "
+            "discovered payloads must be finalized via discovery/persistence hooks"
         )
-    return targets
+
+    return []
 
 
 def _write_discovered_designation_marker(*, marker_map_path: Path, designation: str, encrypted_ext: str) -> None:

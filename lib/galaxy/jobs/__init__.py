@@ -1190,7 +1190,12 @@ class MinimalJobWrapper(HasResourceParameters):
 
     @property
     def galaxy_virtual_env(self):
-        return os.environ.get("VIRTUAL_ENV", None)
+        configured_virtual_env = os.environ.get("VIRTUAL_ENV")
+        if configured_virtual_env:
+            return configured_virtual_env
+        if sys.prefix != sys.base_prefix:
+            return sys.prefix
+        return None
 
     # legacy naming
     get_job_runner = get_job_runner_url

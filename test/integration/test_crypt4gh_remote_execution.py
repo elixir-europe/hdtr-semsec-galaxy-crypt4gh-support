@@ -527,6 +527,15 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         job_api_id = run_response["jobs"][0]["id"]
         self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
 
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job = sa_session.get(model.Job, job_database_id)
+        assert job is not None
+        job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
+        assert job_working_directory is not None
+        marker_dir = Path(job_working_directory) / "_c4gh_stage" / "outputs"
+        assert marker_dir.exists(), marker_dir
+        assert list(marker_dir.glob("path_*.encrypted")) == []
+
         history_contents = self.dataset_populator.get_history_contents(history_id)
         sample_entry = next(
             item for item in history_contents if item["history_content_type"] == "dataset" and item["hid"] == 2

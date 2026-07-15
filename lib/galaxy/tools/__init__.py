@@ -10,6 +10,10 @@ import os
 import re
 import tarfile
 import tempfile
+from datetime import (
+    datetime,
+    timezone,
+)
 from collections.abc import (
     MutableMapping,
     Sequence,
@@ -972,6 +976,58 @@ class JobContext(BaseJobContext):
 
     def get_implicit_collection_jobs_association_id(self):
         return self.job.implicit_collection_jobs_association and self.job.implicit_collection_jobs_association.id
+
+    def crypt4gh_output_finalization_context(self) -> Optional[dict[str, str]]:
+        destination_params = dict(getattr(self.job, "destination_params", {}) or {})
+        service_url = str(
+            destination_params.get("crypt4gh_reencryption_service_url")
+            or getattr(self.app.config, "crypt4gh_reencryption_service_url", "")
+            or ""
+        )
+
+        job_io = getattr(self.job, "job_io", None)
+        if not service_url or not job_io:
+            return None
+
+        from galaxy.tools.crypt4gh_remote_execution import (
+            _collect_crypt4gh_inputs,
+            _prepare_plaintext_inputs,
+            _generate_job_keypair,
+            _assert_minimum_ttl,
+            _minimum_ttl_for_destination,
+            _DEFAULT_MINIMUM_TTL,
+        )
+
+        crypt4gh_inputs = _collect_crypt4gh_inputs(job_io)
+        if not crypt4gh_inputs:
+            return None
+
+        _assert_minimum_ttl(
+            datasets=crypt4gh_inputs,
+            minimum_ttl=_minimum_ttl_for_destination(
+                destination_params=destination_params,
+                fallback_minimum_ttl=_DEFAULT_MINIMUM_TTL,
+            ),
+            now=datetime.now(timezone.utc),
+        )
+
+        crypt_inputs_workspace = Path(self.job_working_directory) / "_crypt" / "inputs"
+        crypt_inputs_workspace.mkdir(parents=True, exist_ok=True)
+        job_private_key, job_public_key = _generate_job_keypair()
+        _, compute_context = _prepare_plaintext_inputs(
+            datasets=crypt4gh_inputs,
+            crypt_inputs_workspace=crypt_inputs_workspace,
+            reencryption_service_url=service_url,
+            job_public_key=job_public_key,
+            job_private_key=job_private_key,
+        )
+
+        return {
+            "reencryption_service_url": service_url,
+            "compute_public_key": compute_context.public_key,
+            "compute_keypair_id": compute_context.keypair_id,
+            "compute_keypair_expiration_date": compute_context.keypair_expiration_date,
+        }
 
 
 class Tool(UsesDictVisibleKeys, ToolParameterBundle):

@@ -70,6 +70,7 @@ class _JobContext:
         self.final_job_state = "ok"
         self.sa_session = None
         self.tool_provided_metadata = self
+        self.finalization_context = None
 
     def output_def(self, _name):
         return None
@@ -98,6 +99,9 @@ class _JobContext:
     def get_job_id(self):
         return 1
 
+    def crypt4gh_output_finalization_context(self):
+        return self.finalization_context
+
 
 def test_collect_primary_datasets_sets_primary_state_ok_when_assigning_primary_output(monkeypatch):
     discovered = _DiscoveredFile("/tmp/sample1.report.tsv")
@@ -114,3 +118,45 @@ def test_collect_primary_datasets_sets_primary_state_ok_when_assigning_primary_o
     collect_primary_datasets(job_context, {"sample": outdata}, input_ext="tabular")
 
     assert outdata.state == outdata.states.OK
+
+
+def test_collect_primary_datasets_finalizes_assigned_primary_when_crypt4gh_context_present(monkeypatch, tmp_path):
+    discovered = _DiscoveredFile(str(tmp_path / "sample1.report.tsv"))
+
+    def _fake_discover_files(*_args, **_kwargs):
+        yield discovered
+
+    calls = []
+
+    def _fake_finalize_about_to_persist_crypt4gh_payload(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr("galaxy.job_execution.output_collect.discover_files", _fake_discover_files)
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution.finalize_about_to_persist_crypt4gh_payload",
+        _fake_finalize_about_to_persist_crypt4gh_payload,
+    )
+
+    job_context = _JobContext()
+    job_context.job_working_directory = str(tmp_path)
+    job_context.finalization_context = {
+        "reencryption_service_url": "http://localhost:8000",
+        "compute_public_key": "-----BEGIN CRYPT4GH PUBLIC KEY-----\nabc\n-----END CRYPT4GH PUBLIC KEY-----\n",
+        "compute_keypair_id": "key-1",
+        "compute_keypair_expiration_date": "",
+    }
+
+    outdata = _OutData()
+    outdata.dataset = _DatasetCarrier(path="")
+    outdata.dataset.id = 42
+    outdata.dataset.purged = True
+    outdata.dataset.external_filename = None
+    outdata.dataset.get_file_name = lambda sync_cache=False: str(tmp_path / "dataset_42.dat")
+
+    collect_primary_datasets(job_context, {"sample": outdata}, input_ext="tabular")
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["output_path"] == str(tmp_path / "sample1.report.tsv")
+    assert call["encrypted_ext"] == "tabular.c4gh"
+    assert call["encrypted_marker_path"].endswith("_c4gh_stage/outputs/ds_42.encrypted")

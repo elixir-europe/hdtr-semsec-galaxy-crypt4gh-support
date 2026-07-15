@@ -226,6 +226,9 @@ class PortableDirectoryMetadataGenerator(MetadataCollectionStrategy):
             "change_datatype_actions": job.get_change_datatype_actions(),
             "enable_crypt4gh_transparent_staging": enable_crypt4gh_transparent_staging,
             "crypt4gh_reencryption_service_url": crypt4gh_reencryption_service_url,
+            "crypt4gh_compute_public_key": "",
+            "crypt4gh_compute_keypair_id": "",
+            "crypt4gh_compute_keypair_expiration_date": "",
         }
 
         # export model objects and object store configuration for extended metadata also.

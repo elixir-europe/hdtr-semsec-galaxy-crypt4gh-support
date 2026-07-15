@@ -188,6 +188,24 @@ def _mark_outputs_for_compute_keypair_clearance(
         json.dump(metadata_params, metadata_stream)
 
 
+def _record_crypt4gh_compute_context(
+    *,
+    metadata_params_path: str,
+    compute_public_key: str,
+    compute_keypair_id: str,
+    compute_keypair_expiration_date: object,
+) -> None:
+    with open(metadata_params_path) as metadata_stream:
+        metadata_params = json.load(metadata_stream)
+
+    metadata_params["crypt4gh_compute_public_key"] = compute_public_key
+    metadata_params["crypt4gh_compute_keypair_id"] = compute_keypair_id
+    metadata_params["crypt4gh_compute_keypair_expiration_date"] = str(compute_keypair_expiration_date or "")
+
+    with open(metadata_params_path, "w") as metadata_stream:
+        json.dump(metadata_params, metadata_stream)
+
+
 def _crypt4gh_finalize_postrun_command(
     *,
     output_targets: list[dict[str, object]],
@@ -314,6 +332,21 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                 working_directory=WORKING_DIRECTORY,
             )
 
+            compute_public_key = getattr(compute_environment, "compute_public_key", None)
+            compute_keypair_id = getattr(compute_environment, "compute_keypair_id", None)
+            compute_keypair_expiration_date = getattr(compute_environment, "compute_keypair_expiration_date", None)
+            if not compute_public_key or not compute_keypair_id:
+                raise Exception(
+                    "Crypt4GH output finalization requires compute public key and compute keypair id"
+                )
+
+            _record_crypt4gh_compute_context(
+                metadata_params_path=os.path.join(WORKING_DIRECTORY, "metadata", "params.json"),
+                compute_public_key=cast(str, compute_public_key),
+                compute_keypair_id=cast(str, compute_keypair_id),
+                compute_keypair_expiration_date=compute_keypair_expiration_date,
+            )
+
             output_targets = collect_declared_crypt4gh_output_targets(
                 job_io=job_io,
                 tool_outputs=tool.outputs,
@@ -321,14 +354,6 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                 working_directory=WORKING_DIRECTORY,
             )
             if output_targets:
-                compute_public_key = getattr(compute_environment, "compute_public_key", None)
-                compute_keypair_id = getattr(compute_environment, "compute_keypair_id", None)
-                compute_keypair_expiration_date = getattr(compute_environment, "compute_keypair_expiration_date", None)
-                if not compute_public_key or not compute_keypair_id:
-                    raise Exception(
-                        "Crypt4GH output finalization requires compute public key and compute keypair id"
-                    )
-
                 postrun_command = _crypt4gh_finalize_postrun_command(
                     output_targets=cast(list[dict[str, object]], output_targets),
                     metadata_params_path=os.path.join(WORKING_DIRECTORY, "metadata", "params.json"),

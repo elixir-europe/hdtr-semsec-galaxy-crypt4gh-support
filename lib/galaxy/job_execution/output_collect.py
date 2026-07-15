@@ -271,6 +271,9 @@ class BaseJobContext(ModelPersistenceContext):
     @abc.abstractmethod
     def output_def(self, name: str) -> Union[None, ToolOutput]: ...
 
+    def crypt4gh_output_finalization_context(self) -> Optional[dict[str, str]]:
+        return None
+
 
 class SessionlessJobContext(SessionlessModelPersistenceContext, BaseJobContext):
     export_store: Optional["DirectoryModelExportStore"]
@@ -365,6 +368,19 @@ class SessionlessJobContext(SessionlessModelPersistenceContext, BaseJobContext):
     def get_implicit_collection_jobs_association_id(self):
         return self.metadata_params.get("implicit_collection_jobs_association_id")
 
+    def crypt4gh_output_finalization_context(self) -> Optional[dict[str, str]]:
+        context = {
+            "reencryption_service_url": str(self.metadata_params.get("crypt4gh_reencryption_service_url", "") or ""),
+            "compute_public_key": str(self.metadata_params.get("crypt4gh_compute_public_key", "") or ""),
+            "compute_keypair_id": str(self.metadata_params.get("crypt4gh_compute_keypair_id", "") or ""),
+            "compute_keypair_expiration_date": str(
+                self.metadata_params.get("crypt4gh_compute_keypair_expiration_date", "") or ""
+            ),
+        }
+        if context["reencryption_service_url"] and context["compute_public_key"] and context["compute_keypair_id"]:
+            return context
+        return None
+
 
 def collect_primary_datasets(job_context: BaseJobContext, output: dict[str, DatasetInstance], input_ext):
     job_working_directory = job_context.job_working_directory
@@ -408,6 +424,13 @@ def collect_primary_datasets(job_context: BaseJobContext, output: dict[str, Data
                 outdata.dbkey = dbkey
                 outdata.designation = designation
                 outdata.dataset.external_filename = None  # resets filename_override
+                _maybe_finalize_crypt4gh_assigned_primary_output(
+                    job_context=job_context,
+                    outdata=outdata,
+                    discovered_output_path=filename,
+                    discovered_designation=designation,
+                    encrypted_ext=ext,
+                )
                 # Move data from temp location to dataset location
                 if not outdata.dataset.purged:
                     assert job_context.object_store
@@ -482,6 +505,56 @@ def collect_primary_datasets(job_context: BaseJobContext, output: dict[str, Data
     for callback in storage_callbacks:
         callback()
     return primary_datasets
+
+
+def _maybe_finalize_crypt4gh_assigned_primary_output(
+    *,
+    job_context: BaseJobContext,
+    outdata: DatasetInstance,
+    discovered_output_path: str,
+    discovered_designation: str,
+    encrypted_ext: str,
+) -> None:
+    if not str(encrypted_ext).endswith(".c4gh"):
+        return
+
+    crypt4gh_context = job_context.crypt4gh_output_finalization_context()
+    if not crypt4gh_context:
+        return
+
+    dataset_object = getattr(outdata, "dataset", None)
+    dataset_id = getattr(dataset_object, "id", None)
+    if not isinstance(dataset_id, int):
+        raise RuntimeError("Crypt4GH assigned primary output is missing a persisted dataset id")
+
+    dataset_output_path = ""
+    get_file_name = getattr(dataset_object, "get_file_name", None)
+    if callable(get_file_name):
+        try:
+            dataset_output_path = str(get_file_name(sync_cache=False) or "")
+        except TypeError:
+            dataset_output_path = str(get_file_name() or "")
+
+    job_working_directory = job_context.job_working_directory
+    marker_dir = os.path.join(job_working_directory, "_c4gh_stage", "outputs")
+    plaintext_path = os.path.join(job_working_directory, "_crypt", "outputs", f"ds_{dataset_id}", "plaintext")
+
+    from galaxy.tools.crypt4gh_remote_execution import finalize_about_to_persist_crypt4gh_payload
+
+    finalize_about_to_persist_crypt4gh_payload(
+        output_path=str(discovered_output_path),
+        dataset_output_path=dataset_output_path,
+        plaintext_path=plaintext_path,
+        encrypted_ext=str(encrypted_ext),
+        reencryption_service_url=str(crypt4gh_context.get("reencryption_service_url", "") or ""),
+        compute_public_key=str(crypt4gh_context.get("compute_public_key", "") or ""),
+        compute_keypair_id=str(crypt4gh_context.get("compute_keypair_id", "") or ""),
+        compute_keypair_expiration_date=str(crypt4gh_context.get("compute_keypair_expiration_date", "") or "") or None,
+        encrypted_marker_path=os.path.join(marker_dir, f"ds_{dataset_id}.encrypted"),
+        designation=str(discovered_designation or ""),
+        discovered_marker_map_path=os.path.join(marker_dir, "discovered_designations.json"),
+        clear_compute_keypair=True,
+    )
 
 
 def discover_files(output_name, tool_provided_metadata, extra_file_collectors, job_working_directory, matchable):
