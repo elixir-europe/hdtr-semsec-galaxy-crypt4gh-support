@@ -261,6 +261,7 @@ Minimum verification commands for the finished slice:
 - Note: TTL guards were implemented in task 3 due to plan inconsistencies, but not thoroughly tested.
 - Note: Previous Task 7 wording that focused only on discovered datasets + expiry is superseded. This task now owns the remaining output-enforcement alignment work required by the 2026-07-14 addendum.
 - [ ] Extend the integration test module with discovered-output encryption after the declared-output slice is already green, including at least one non-pattern discovery path that still persists datasets.
+- [ ] Extend unit and/or integration coverage with discovered-output designation/path mapping evidence assertions: emitted evidence must link each persisted discovered payload to its discovery designation/path mapping, and missing or invalid mapping evidence must fail the verifier with diagnostics that name the evidence class.
 - [ ] Extend the integration test module with `extra_files` payload encryption and manifest-completeness assertions.
 - [ ] Extend the integration test module with a dataset-centric proof case where payload selection cannot be justified by `/outputs` membership alone (for example `false_path` vs `real_path` divergence and/or a persisted discovered payload outside `/outputs`).
 - [ ] Extend unit and/or integration coverage with a universal pre-success fail-closed verifier assertion: if any declared/discovered/`extra_files` persisted payload lacks encryption evidence, final success is blocked and the job fails with diagnostics.
@@ -271,10 +272,12 @@ Minimum verification commands for the finished slice:
   - local minimum-TTL gate runs before any B call
 - [ ] Add/adjust unit coverage in `test/unit/jobs/test_crypt4gh_remote_execution.py` for verifier diagnostics:
   - missing payload-marker evidence identifies the evidence class
+  - missing or invalid discovered-output designation/path mapping evidence identifies the evidence class
   - missing `extra_files` manifest evidence identifies the evidence class
 - [ ] Run: `pytest test/integration/test_crypt4gh_remote_execution.py -q`
   Expected: FAIL with discovered-output, `extra_files`, verifier, allow-list, or expiry-behavior assertions.
 - [ ] Implement discovered-output selection using core persisted dataset mapping rather than collector-subset logic.
+- [ ] Implement discovered-output designation/path mapping evidence emission and verifier consumption for persisted discovered payloads.
 - [ ] Implement encryption coverage for `extra_files` payload files plus manifest evidence linked to the owning dataset.
 - [ ] Implement/reuse payload-marker evidence for declared/discovered payloads and add `extra_files` manifest evidence that the verifier can consume.
 - [ ] Implement a universal pre-success fail-closed verifier over all persisted payload candidates for Crypt4GH jobs.
