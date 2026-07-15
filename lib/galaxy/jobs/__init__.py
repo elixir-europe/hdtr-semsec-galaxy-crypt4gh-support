@@ -2127,6 +2127,20 @@ class MinimalJobWrapper(HasResourceParameters):
         except Crypt4GHRemoteExecutionError as exc:
             raise RuntimeError(str(exc)) from exc
 
+    def _current_output_dataset_associations(self, job: Job):
+        return job.output_datasets + job.output_library_datasets
+
+    def _discover_outputs_and_refresh_associations(
+        self,
+        job: Job,
+        inp_data,
+        out_data,
+        out_collections,
+        final_job_state,
+    ):
+        self.discover_outputs(job, inp_data, out_data, out_collections, final_job_state=final_job_state)
+        return self._current_output_dataset_associations(job)
+
     def _normalize_successful_output_association_states(self, job: Job, output_dataset_associations) -> None:
         pending_states = {
             Dataset.states.NEW,
@@ -2278,13 +2292,19 @@ class MinimalJobWrapper(HasResourceParameters):
                 version_filename = self.get_version_string_path()
                 self.version_string = collect_shrinked_content_from_path(version_filename)
 
-        output_dataset_associations = job.output_datasets + job.output_library_datasets
+        output_dataset_associations = self._current_output_dataset_associations(job)
         inp_data, out_data, out_collections = job.io_dicts()
 
         if not extended_metadata:
             # importing metadata will discover outputs if extended metadata
             try:
-                self.discover_outputs(job, inp_data, out_data, out_collections, final_job_state=final_job_state)
+                output_dataset_associations = self._discover_outputs_and_refresh_associations(
+                    job,
+                    inp_data,
+                    out_data,
+                    out_collections,
+                    final_job_state,
+                )
             except (MaxDiscoveredFilesExceededError, JobOutputNameTooLongError) as e:
                 log.warning("Job %s failed during output discovery: %s", job.id, e)
                 final_job_state = job.states.ERROR

@@ -2,6 +2,8 @@
 Classes encapsulating galaxy tools and tool configuration.
 """
 
+from __future__ import annotations
+
 import itertools
 import json
 import logging

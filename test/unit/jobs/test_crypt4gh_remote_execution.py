@@ -149,6 +149,19 @@ def test_cleanup_wrapper_runs_after_tool_failure_and_preserves_diagnostics(tmp_p
     assert CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER in completed.stderr
 
 
+def test_cleanup_wrapper_expands_cleanup_exit_code_in_marker_message():
+    wrapped_command = build_crypt4gh_cleanup_wrapped_command(
+        tool_command="python -c \"print('ok')\"",
+        cleanup_command="python -c \"import sys; sys.exit(17)\"",
+    )
+
+    completed = subprocess.run(["/bin/bash", "-c", wrapped_command], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 17
+    assert f"{CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER}: cleanup failed with exit code 17" in completed.stderr
+    assert "${_CRYPT4GH_CLEANUP_EXIT}" not in completed.stderr
+
+
 def test_cleanup_wrapper_reports_postrun_errors_without_cleanup_failure_marker(tmp_path):
     cleanup_marker = tmp_path / "cleanup-ran"
     wrapped_command = build_crypt4gh_cleanup_wrapped_command(

@@ -1482,8 +1482,8 @@ def build_crypt4gh_cleanup_wrapped_command(
         include_exit_checks=False,
     )
     marker_line = (
-        f"    echo '{CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER}: cleanup failed with exit code "
-        "${_CRYPT4GH_CLEANUP_EXIT}' >&2"
+        f'    echo "{CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER}: cleanup failed with exit code '
+        '${_CRYPT4GH_CLEANUP_EXIT}" >&2'
     )
     lines.extend(
         [

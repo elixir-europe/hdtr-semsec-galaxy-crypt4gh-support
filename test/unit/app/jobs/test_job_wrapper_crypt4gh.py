@@ -88,3 +88,47 @@ def test_verify_crypt4gh_pre_success_evidence_wraps_crypt4gh_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="payload marker missing"):
         wrapper._verify_crypt4gh_pre_success_evidence(SimpleNamespace(id=1), [])
+
+
+def test_current_output_dataset_associations_include_late_discovered_outputs():
+    wrapper = JobWrapper.__new__(JobWrapper)
+
+    declared = SimpleNamespace(name="declared")
+    discovered = SimpleNamespace(name="__new_primary_file_out|sample__")
+    job = SimpleNamespace(
+        output_datasets=[declared],
+        output_library_datasets=[],
+    )
+
+    stale_associations = job.output_datasets + job.output_library_datasets
+    job.output_datasets.append(discovered)
+
+    current_associations = wrapper._current_output_dataset_associations(job)
+
+    assert discovered not in stale_associations
+    assert current_associations == [declared, discovered]
+
+
+def test_discover_outputs_and_refresh_associations_returns_new_discovered_associations():
+    wrapper = JobWrapper.__new__(JobWrapper)
+    declared = SimpleNamespace(name="declared")
+    discovered = SimpleNamespace(name="__new_primary_file_out|sample__")
+    job = SimpleNamespace(
+        output_datasets=[declared],
+        output_library_datasets=[],
+    )
+
+    def _discover_outputs(*_args, **_kwargs):
+        job.output_datasets.append(discovered)
+
+    wrapper.discover_outputs = _discover_outputs
+
+    refreshed_associations = wrapper._discover_outputs_and_refresh_associations(
+        job,
+        inp_data={},
+        out_data={},
+        out_collections={},
+        final_job_state="ok",
+    )
+
+    assert refreshed_associations == [declared, discovered]
