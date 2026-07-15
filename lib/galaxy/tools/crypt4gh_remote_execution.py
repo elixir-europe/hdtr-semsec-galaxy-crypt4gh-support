@@ -1215,6 +1215,242 @@ def _assert_crypt4gh_payload_header(*, path: Path) -> None:
             raise Crypt4GHRemoteExecutionError(f"Crypt4GH extra_files payload remained plaintext: {path}")
 
 
+def verify_crypt4gh_pre_success_output_evidence(
+    *,
+    working_directory: str,
+    output_dataset_associations: Sequence[Any],
+) -> None:
+    marker_dirs = _resolve_pre_success_marker_directories(working_directory=working_directory)
+    if not marker_dirs:
+        return
+
+    discovered_designations: set[str] = set()
+    dataset_candidates: dict[int, dict[str, Any]] = {}
+    for output_dataset_assoc in output_dataset_associations:
+        association_name = getattr(output_dataset_assoc, "name", "")
+        designation = _resolve_discovered_designation(association_name)
+        if designation:
+            discovered_designations.add(designation)
+
+        dataset_instance = getattr(output_dataset_assoc, "dataset", None)
+        dataset = getattr(dataset_instance, "dataset", None)
+        dataset_id = getattr(dataset, "id", None)
+        if not isinstance(dataset_id, int):
+            continue
+
+        require_payload_marker = not bool(designation)
+        candidate = dataset_candidates.get(dataset_id)
+        if candidate is None:
+            dataset_candidates[dataset_id] = {
+                "dataset": dataset,
+                "require_payload_marker": require_payload_marker,
+            }
+        else:
+            candidate["require_payload_marker"] = bool(candidate.get("require_payload_marker", False)) or require_payload_marker
+
+    diagnostics: list[str] = []
+    for dataset_id in sorted(dataset_candidates):
+        candidate = dataset_candidates[dataset_id]
+        if bool(candidate.get("require_payload_marker", False)):
+            _verify_payload_marker_evidence(marker_dirs=marker_dirs, dataset_id=dataset_id, diagnostics=diagnostics)
+        _verify_extra_files_manifest_evidence(
+            marker_dirs=marker_dirs,
+            dataset_id=dataset_id,
+            dataset=candidate.get("dataset"),
+            diagnostics=diagnostics,
+        )
+
+    if discovered_designations:
+        _verify_discovered_mapping_evidence(
+            marker_dirs=marker_dirs,
+            discovered_designations=discovered_designations,
+            diagnostics=diagnostics,
+        )
+
+    if diagnostics:
+        diagnostics_text = "; ".join(diagnostics)
+        log.error("Crypt4GH pre-success verifier failed in %s: %s", working_directory, diagnostics_text)
+        raise Crypt4GHRemoteExecutionError(f"Crypt4GH pre-success verifier failed: {diagnostics_text}")
+
+
+def _resolve_pre_success_marker_directories(*, working_directory: str) -> list[Path]:
+    working_directory_path = Path(working_directory)
+    candidates = [
+        working_directory_path / "_c4gh_stage" / "outputs",
+        working_directory_path / "working" / "_c4gh_stage" / "outputs",
+    ]
+    parent_directory = working_directory_path.parent
+    if parent_directory != working_directory_path:
+        candidates.append(parent_directory / "_c4gh_stage" / "outputs")
+
+    marker_dirs: list[Path] = []
+    seen_dirs: set[str] = set()
+    for candidate in candidates:
+        candidate_key = str(candidate)
+        if candidate_key in seen_dirs:
+            continue
+        seen_dirs.add(candidate_key)
+        if candidate.is_dir():
+            marker_dirs.append(candidate)
+    return marker_dirs
+
+
+def _resolve_discovered_designation(association_name: Any) -> str:
+    if not isinstance(association_name, str) or not association_name.startswith("__new_primary_file_"):
+        return ""
+
+    split_name = association_name[len("__new_primary_file_") :].split("|", 1)
+    if len(split_name) != 2:
+        return ""
+
+    designation = split_name[1]
+    if designation.endswith("__"):
+        designation = designation[:-2]
+    return designation
+
+
+def _verify_payload_marker_evidence(*, marker_dirs: Sequence[Path], dataset_id: int, diagnostics: list[str]) -> None:
+    found_marker = False
+    saw_unreadable_marker = False
+    saw_invalid_marker = False
+
+    for marker_dir in marker_dirs:
+        marker_path = marker_dir / f"ds_{dataset_id}.encrypted"
+        if not marker_path.exists():
+            continue
+
+        found_marker = True
+        try:
+            marker_ext = marker_path.read_text().strip()
+        except Exception:
+            saw_unreadable_marker = True
+            continue
+
+        if marker_ext:
+            return
+        saw_invalid_marker = True
+
+    if not found_marker:
+        diagnostics.append(f"payload marker missing for dataset_id={dataset_id}")
+    elif saw_invalid_marker:
+        diagnostics.append(f"payload marker invalid for dataset_id={dataset_id}")
+    elif saw_unreadable_marker:
+        diagnostics.append(f"payload marker unreadable for dataset_id={dataset_id}")
+
+
+def _verify_discovered_mapping_evidence(
+    *, marker_dirs: Sequence[Path], discovered_designations: set[str], diagnostics: list[str]
+) -> None:
+    mapping_paths = [marker_dir / "discovered_designations.json" for marker_dir in marker_dirs]
+    existing_paths = [mapping_path for mapping_path in mapping_paths if mapping_path.exists()]
+    if not existing_paths:
+        for designation in sorted(discovered_designations):
+            diagnostics.append(f"discovered-output mapping missing for designation={designation}")
+        return
+
+    merged_mapping: dict[str, str] = {}
+    saw_unreadable_mapping = False
+    saw_invalid_mapping = False
+    for mapping_path in existing_paths:
+        try:
+            loaded_mapping = json.loads(mapping_path.read_text())
+        except Exception:
+            saw_unreadable_mapping = True
+            continue
+
+        if not isinstance(loaded_mapping, dict):
+            saw_invalid_mapping = True
+            continue
+
+        for key, value in loaded_mapping.items():
+            merged_mapping[str(key)] = str(value)
+
+    if not merged_mapping:
+        if saw_invalid_mapping:
+            diagnostics.append("discovered-output mapping invalid")
+            return
+        if saw_unreadable_mapping:
+            diagnostics.append("discovered-output mapping unreadable")
+            return
+        for designation in sorted(discovered_designations):
+            diagnostics.append(f"discovered-output mapping missing for designation={designation}")
+        return
+
+    for designation in sorted(discovered_designations):
+        if not any(
+            bool(value) and (key == designation or designation in key)
+            for key, value in merged_mapping.items()
+        ):
+            diagnostics.append(f"discovered-output mapping missing for designation={designation}")
+
+
+def _verify_extra_files_manifest_evidence(
+    *, marker_dirs: Sequence[Path], dataset_id: int, dataset: Any, diagnostics: list[str]
+) -> None:
+    dataset_path = _dataset_payload_path(dataset)
+    if not dataset_path:
+        return
+
+    extra_files_path = Path(dataset_path_to_extra_path(dataset_path))
+    if not extra_files_path.exists() or not extra_files_path.is_dir():
+        return
+
+    expected_entries: set[str] = set()
+    for root, _dirs, files in os.walk(extra_files_path):
+        root_path = Path(root)
+        for file_name in files:
+            source_path = root_path / file_name
+            relative_path = os.path.relpath(source_path, extra_files_path)
+            expected_entries.add(relative_path.replace(os.sep, "/"))
+
+    if not expected_entries:
+        return
+
+    manifest_paths = [marker_dir / f"ds_{dataset_id}.extra_files_manifest.json" for marker_dir in marker_dirs]
+    existing_paths = [manifest_path for manifest_path in manifest_paths if manifest_path.exists()]
+    if not existing_paths:
+        diagnostics.append(f"extra_files manifest missing for dataset_id={dataset_id}")
+        return
+
+    saw_unreadable_manifest = False
+    saw_invalid_manifest = False
+    saw_missing_entries = False
+    for manifest_path in existing_paths:
+        try:
+            manifest_payload = json.loads(manifest_path.read_text())
+        except Exception:
+            saw_unreadable_manifest = True
+            continue
+
+        files_payload = manifest_payload.get("files") if isinstance(manifest_payload, dict) else None
+        if not isinstance(files_payload, dict):
+            saw_invalid_manifest = True
+            continue
+
+        missing_entries = expected_entries - set(files_payload.keys())
+        if not missing_entries:
+            return
+        saw_missing_entries = True
+
+    if saw_missing_entries:
+        diagnostics.append(f"extra_files manifest missing entries for dataset_id={dataset_id}")
+    elif saw_invalid_manifest:
+        diagnostics.append(f"extra_files manifest invalid for dataset_id={dataset_id}")
+    elif saw_unreadable_manifest:
+        diagnostics.append(f"extra_files manifest unreadable for dataset_id={dataset_id}")
+
+
+def _dataset_payload_path(dataset: Any) -> str:
+    get_file_name = getattr(dataset, "get_file_name", None)
+    if not callable(get_file_name):
+        return ""
+
+    try:
+        return str(get_file_name(sync_cache=False) or "")
+    except TypeError:
+        return str(get_file_name() or "")
+
+
 def build_crypt4gh_cleanup_wrapped_command(
     *, tool_command: str, cleanup_command: str, postrun_command: str = ""
 ) -> str:

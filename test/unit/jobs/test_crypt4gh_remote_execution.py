@@ -1206,6 +1206,184 @@ def test_finalize_declared_outputs_fail_closed_when_extra_files_manifest_missing
         )
 
 
+def test_pre_success_verifier_fails_for_missing_payload_marker(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+
+    dataset_path = tmp_path / "objects" / "dataset_31.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="payload marker missing"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(31, str(dataset_path))),
+            ],
+        )
+
+
+def test_pre_success_verifier_fails_for_missing_discovered_mapping(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+
+    (marker_dir / "ds_41.encrypted").write_text("tabular.c4gh\n")
+
+    dataset_path = tmp_path / "objects" / "dataset_41.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="discovered-output mapping missing"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(41, str(dataset_path))),
+            ],
+        )
+
+
+def test_pre_success_verifier_allows_discovered_outputs_without_dataset_marker_when_mapping_present(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "discovered_designations.json").write_text(json.dumps({"sample1": "txt.c4gh"}))
+
+    dataset_path = tmp_path / "objects" / "dataset_61.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+        working_directory=str(tmp_path),
+        output_dataset_associations=[
+            _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(61, str(dataset_path))),
+        ],
+    )
+
+
+def test_pre_success_verifier_fails_for_missing_extra_files_manifest(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+
+    (marker_dir / "ds_51.encrypted").write_text("tabular.c4gh\n")
+
+    dataset_path = tmp_path / "objects" / "dataset_51.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    extra_files_path = tmp_path / "objects" / "dataset_51_files"
+    extra_files_path.mkdir(parents=True, exist_ok=True)
+    (extra_files_path / "foo.txt").write_bytes(b"crypt4ghextra")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="extra_files manifest missing"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(51, str(dataset_path))),
+            ],
+        )
+
+
+def test_pre_success_verifier_accepts_discovered_markers_written_under_working_subdir(tmp_path):
+    root_marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    root_marker_dir.mkdir(parents=True, exist_ok=True)
+    (root_marker_dir / "ds_2.encrypted").write_text("txt.c4gh\n")
+
+    working_marker_dir = tmp_path / "working" / "_c4gh_stage" / "outputs"
+    working_marker_dir.mkdir(parents=True, exist_ok=True)
+    (working_marker_dir / "ds_3.encrypted").write_text("tabular.c4gh\n")
+    (working_marker_dir / "discovered_designations.json").write_text(
+        json.dumps(
+            {
+                "sample2": "tabular.c4gh",
+                "sample3": "tabular.c4gh",
+            }
+        )
+    )
+
+    dataset_path = tmp_path / "objects" / "dataset_payload.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+        working_directory=str(tmp_path),
+        output_dataset_associations=[
+            _DatasetAssociation("other", _DatasetObject(2, str(dataset_path))),
+            _DatasetAssociation("sample", _DatasetObject(3, str(dataset_path))),
+            _DatasetAssociation("__new_primary_file_sample|sample2__", _DatasetObject(4, str(dataset_path))),
+            _DatasetAssociation("__new_primary_file_sample|sample3__", _DatasetObject(5, str(dataset_path))),
+        ],
+    )
+
+
 def test_discovered_crypt4gh_metadata_path_clears_compute_keypair_without_generic_set_meta(monkeypatch):
     from galaxy.model.store.discover import ModelPersistenceContext
 

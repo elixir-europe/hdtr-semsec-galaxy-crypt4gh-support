@@ -1,7 +1,11 @@
 from types import SimpleNamespace
 
+import pytest
+
+import galaxy.jobs as galaxy_jobs
 from galaxy.jobs import JobWrapper
 from galaxy.model import Dataset
+from galaxy.tools.crypt4gh_remote_execution import Crypt4GHRemoteExecutionError
 
 
 def _dataset_assoc_with_instances(*instances):
@@ -48,3 +52,39 @@ def test_normalize_successful_output_association_states_leaves_non_pending_uncha
     assert ok_instance.state == Dataset.states.OK
     assert failed_meta_instance.state == Dataset.states.FAILED_METADATA
     assert added == []
+
+
+def test_verify_crypt4gh_pre_success_evidence_calls_verifier_with_working_directory(monkeypatch):
+    wrapper = JobWrapper.__new__(JobWrapper)
+    wrapper._MinimalJobWrapper__working_directory = "/tmp/workdir"
+
+    captured = {}
+
+    def _fake_verifier(*, working_directory, output_dataset_associations):
+        captured["working_directory"] = working_directory
+        captured["output_dataset_associations"] = output_dataset_associations
+
+    monkeypatch.setattr(galaxy_jobs, "verify_crypt4gh_pre_success_output_evidence", _fake_verifier)
+
+    associations = [SimpleNamespace(name="out")]
+    wrapper._verify_crypt4gh_pre_success_evidence(SimpleNamespace(id=1), associations)
+
+    assert captured == {
+        "working_directory": "/tmp/workdir",
+        "output_dataset_associations": associations,
+    }
+
+
+def test_verify_crypt4gh_pre_success_evidence_wraps_crypt4gh_error(monkeypatch):
+    wrapper = JobWrapper.__new__(JobWrapper)
+    wrapper._MinimalJobWrapper__working_directory = "/tmp/workdir"
+
+    def _raising_verifier(*, working_directory, output_dataset_associations):
+        del working_directory
+        del output_dataset_associations
+        raise Crypt4GHRemoteExecutionError("payload marker missing for dataset_id=99")
+
+    monkeypatch.setattr(galaxy_jobs, "verify_crypt4gh_pre_success_output_evidence", _raising_verifier)
+
+    with pytest.raises(RuntimeError, match="payload marker missing"):
+        wrapper._verify_crypt4gh_pre_success_evidence(SimpleNamespace(id=1), [])

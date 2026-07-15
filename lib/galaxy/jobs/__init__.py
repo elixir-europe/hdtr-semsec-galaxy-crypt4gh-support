@@ -105,6 +105,10 @@ from galaxy.tools.evaluation import (
     ToolEvaluator,
     UserToolEvaluator,
 )
+from galaxy.tools.crypt4gh_remote_execution import (
+    Crypt4GHRemoteExecutionError,
+    verify_crypt4gh_pre_success_output_evidence,
+)
 from galaxy.tools.parameters import params_to_json_internal
 from galaxy.util import (
     parse_xml_string,
@@ -2114,6 +2118,15 @@ class MinimalJobWrapper(HasResourceParameters):
                         encrypted_ext,
                     )
 
+    def _verify_crypt4gh_pre_success_evidence(self, job: Job, output_dataset_associations) -> None:
+        try:
+            verify_crypt4gh_pre_success_output_evidence(
+                working_directory=self.working_directory,
+                output_dataset_associations=output_dataset_associations,
+            )
+        except Crypt4GHRemoteExecutionError as exc:
+            raise RuntimeError(str(exc)) from exc
+
     def _normalize_successful_output_association_states(self, job: Job, output_dataset_associations) -> None:
         pending_states = {
             Dataset.states.NEW,
@@ -2318,6 +2331,17 @@ class MinimalJobWrapper(HasResourceParameters):
                 # association states now that the job has completed successfully.
                 self._normalize_successful_output_association_states(job, output_dataset_associations)
             self._apply_crypt4gh_marked_extensions(job, output_dataset_associations)
+            try:
+                self._verify_crypt4gh_pre_success_evidence(job, output_dataset_associations)
+            except Exception as e:
+                final_job_state = job.states.ERROR
+                existing_stderr = tool_stderr or ""
+                verifier_diagnostics = f"Crypt4GH pre-success verifier failed: {e}"
+                tool_stderr = f"{existing_stderr}\n{verifier_diagnostics}" if existing_stderr else verifier_diagnostics
+                try:
+                    job.set_streams(tool_stdout, tool_stderr, job_stdout=job_stdout, job_stderr=job_stderr)
+                except Exception:
+                    log.exception("(%s) Failed to persist Crypt4GH verifier diagnostics in job streams", job.id)
 
         if job.states.ERROR == final_job_state:
             for dataset_assoc in output_dataset_associations:
