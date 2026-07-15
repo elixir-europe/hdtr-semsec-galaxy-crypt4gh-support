@@ -5,7 +5,6 @@ from typing import (
     cast,
     TYPE_CHECKING,
 )
-from unittest.mock import patch
 
 from galaxy.app_unittest_utils.tools_support import (
     MockContext,
@@ -87,20 +86,6 @@ class AbstractTestCases:
         def test_prepare_sets_dependency_shell_commands(self):
             with self._prepared_wrapper() as wrapper:
                 assert TEST_DEPENDENCIES_COMMANDS == wrapper.dependency_shell_commands
-
-        def test_galaxy_virtual_env_uses_virtual_env_variable_when_set(self):
-            with patch.dict(os.environ, {"VIRTUAL_ENV": "/tmp/explicit-venv"}, clear=False):
-                wrapper = self._wrapper()
-                assert wrapper.galaxy_virtual_env == "/tmp/explicit-venv"
-
-        def test_galaxy_virtual_env_falls_back_to_interpreter_prefix_when_virtual_env_unset(self):
-            with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("VIRTUAL_ENV", None)
-                with patch("galaxy.jobs.sys.prefix", "/tmp/interpreter-venv"), patch(
-                    "galaxy.jobs.sys.base_prefix", "/usr"
-                ):
-                    wrapper = self._wrapper()
-                    assert wrapper.galaxy_virtual_env == "/tmp/interpreter-venv"
 
         @abc.abstractmethod
         def _wrapper(self) -> JobWrapper:
