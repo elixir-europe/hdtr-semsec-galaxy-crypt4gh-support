@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import shutil
+import sys
 import tempfile
 import traceback
 from collections.abc import Callable
@@ -151,14 +152,43 @@ def _destination_params_for_remote_eval(job_io: JobIO) -> dict:
     return destination_params
 
 
-def _crypt4gh_cleanup_command(*, galaxy_lib_for_finalize: str, working_directory: str) -> str:
-    cleanup_script = (
-        "from galaxy.tools.crypt4gh_remote_execution import cleanup_crypt4gh_plaintext_artifacts as _c; "
-        f"_c(working_directory={json.dumps(working_directory)})"
-    )
+def _render_embedded_python_command(*, galaxy_lib_for_finalize: str, python_executable: str, script: str) -> str:
     return (
         f"PYTHONPATH={shlex.quote(galaxy_lib_for_finalize)}:$PYTHONPATH "
-        f"python -c {shlex.quote(cleanup_script)}"
+        f"{shlex.quote(python_executable)} -c {shlex.quote(script)}"
+    )
+
+
+def _crypt4gh_cleanup_command(
+    *,
+    galaxy_lib_for_finalize: str,
+    working_directory: str,
+    python_executable: str,
+) -> str:
+    cleanup_script = (
+        "import os\n"
+        "import shutil\n"
+        "\n"
+        f"_WORKING_DIRECTORY = {json.dumps(working_directory)}\n"
+        "\n"
+        "def _best_effort_cleanup() -> None:\n"
+        "    crypt_root = os.path.join(_WORKING_DIRECTORY, '_crypt')\n"
+        "    for child_name in ('inputs', 'outputs'):\n"
+        "        child_path = os.path.join(crypt_root, child_name)\n"
+        "        if os.path.exists(child_path):\n"
+        "            shutil.rmtree(child_path, ignore_errors=True)\n"
+        "\n"
+        "try:\n"
+        "    from galaxy.tools.crypt4gh_remote_execution import cleanup_crypt4gh_plaintext_artifacts as _cleanup\n"
+        "    _cleanup(working_directory=_WORKING_DIRECTORY)\n"
+        "except Exception:\n"
+        "    _best_effort_cleanup()\n"
+        "    raise\n"
+    )
+    return _render_embedded_python_command(
+        galaxy_lib_for_finalize=galaxy_lib_for_finalize,
+        python_executable=python_executable,
+        script=cleanup_script,
     )
 
 
@@ -215,22 +245,58 @@ def _crypt4gh_finalize_postrun_command(
     compute_public_key: str,
     compute_keypair_id: str,
     compute_keypair_expiration_date: object,
+    python_executable: str,
 ) -> str:
     finalize_script = (
-        "from galaxy.tools.crypt4gh_remote_execution import finalize_declared_crypt4gh_outputs as _f; "
-        "from galaxy.tools.remote_tool_eval import _mark_outputs_for_compute_keypair_clearance as _m; "
-        "import json; "
-        f"_targets=json.loads({json.dumps(json.dumps(output_targets))}); "
-        f"_m(metadata_params_path={json.dumps(metadata_params_path)}, output_targets=_targets); "
-        f"_f(output_targets=_targets, "
-        f"reencryption_service_url={json.dumps(reencryption_service_url)}, "
-        f"compute_public_key={json.dumps(compute_public_key)}, "
-        f"compute_keypair_id={json.dumps(compute_keypair_id)}, "
-        f"compute_keypair_expiration_date={json.dumps(compute_keypair_expiration_date)})"
+        "import json\n"
+        "import os\n"
+        "import shutil\n"
+        "\n"
+        f"_TARGETS = json.loads({json.dumps(json.dumps(output_targets))})\n"
+        "\n"
+        "def _safe_remove(path: str) -> None:\n"
+        "    if not path:\n"
+        "        return\n"
+        "    if not os.path.exists(path):\n"
+        "        return\n"
+        "    if os.path.isdir(path):\n"
+        "        shutil.rmtree(path, ignore_errors=True)\n"
+        "        return\n"
+        "    try:\n"
+        "        os.unlink(path)\n"
+        "    except Exception:\n"
+        "        if os.path.isdir(path):\n"
+        "            shutil.rmtree(path, ignore_errors=True)\n"
+        "\n"
+        "def _purge_plaintext_payloads(targets):\n"
+        "    for target in targets:\n"
+        "        if not isinstance(target, dict):\n"
+        "            continue\n"
+        "        _safe_remove(str(target.get('output_path', '') or ''))\n"
+        "        _safe_remove(str(target.get('dataset_output_path', '') or ''))\n"
+        "        _safe_remove(str(target.get('extra_files_output_path', '') or ''))\n"
+        "        _safe_remove(str(target.get('encrypted_marker_path', '') or ''))\n"
+        "        _safe_remove(str(target.get('extra_files_manifest_path', '') or ''))\n"
+        "\n"
+        "try:\n"
+        "    from galaxy.tools.crypt4gh_remote_execution import finalize_declared_crypt4gh_outputs as _finalize\n"
+        "    from galaxy.tools.remote_tool_eval import _mark_outputs_for_compute_keypair_clearance as _mark\n"
+        f"    _mark(metadata_params_path={json.dumps(metadata_params_path)}, output_targets=_TARGETS)\n"
+        "    _finalize(\n"
+        "        output_targets=_TARGETS,\n"
+        f"        reencryption_service_url={json.dumps(reencryption_service_url)},\n"
+        f"        compute_public_key={json.dumps(compute_public_key)},\n"
+        f"        compute_keypair_id={json.dumps(compute_keypair_id)},\n"
+        f"        compute_keypair_expiration_date={json.dumps(compute_keypair_expiration_date)},\n"
+        "    )\n"
+        "except Exception:\n"
+        "    _purge_plaintext_payloads(_TARGETS)\n"
+        "    raise\n"
     )
-    return (
-        f"PYTHONPATH={shlex.quote(galaxy_lib_for_finalize)}:$PYTHONPATH "
-        f"python -c {shlex.quote(finalize_script)}"
+    return _render_embedded_python_command(
+        galaxy_lib_for_finalize=galaxy_lib_for_finalize,
+        python_executable=python_executable,
+        script=finalize_script,
     )
 
 
@@ -273,6 +339,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         metadata_params=metadata_params,
     )
     datatypes_registry = validate_and_load_datatypes_config(datatypes_config)
+    python_executable = os.path.realpath(sys.executable)
     object_store = get_object_store(WORKING_DIRECTORY)
     import_store = store.imported_store_for_metadata(IMPORT_STORE_DIRECTORY)
     assert isinstance(import_store.sa_session, SessionlessContext)
@@ -330,6 +397,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
             cleanup_command = _crypt4gh_cleanup_command(
                 galaxy_lib_for_finalize=galaxy_lib_for_finalize,
                 working_directory=WORKING_DIRECTORY,
+                python_executable=python_executable,
             )
 
             compute_public_key = getattr(compute_environment, "compute_public_key", None)
@@ -362,6 +430,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                     compute_public_key=cast(str, compute_public_key),
                     compute_keypair_id=cast(str, compute_keypair_id),
                     compute_keypair_expiration_date=compute_keypair_expiration_date,
+                    python_executable=python_executable,
                 )
         command_line = build_crypt4gh_cleanup_wrapped_command(
             tool_command=command_line or "",
