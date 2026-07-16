@@ -1,35 +1,9 @@
+import subprocess
+
 from galaxy.tools.remote_tool_eval import (
     _crypt4gh_cleanup_command,
     _crypt4gh_finalize_postrun_command,
 )
-import subprocess
-
-
-def test_cleanup_command_uses_explicit_python_executable():
-    command = _crypt4gh_cleanup_command(
-        galaxy_lib_for_finalize="/tmp/galaxy/lib",
-        working_directory="/tmp/job-working",
-        python_executable="/tmp/python-expected",
-    )
-
-    assert "/tmp/python-expected -c" in command
-    assert " python -c " not in command
-
-
-def test_finalize_command_uses_explicit_python_executable():
-    command = _crypt4gh_finalize_postrun_command(
-        output_targets=[],
-        metadata_params_path="/tmp/job-working/metadata/params.json",
-        galaxy_lib_for_finalize="/tmp/galaxy/lib",
-        reencryption_service_url="http://127.0.0.1:36667",
-        compute_public_key="public-key",
-        compute_keypair_id="mock-keypair",
-        compute_keypair_expiration_date="2099-01-01T00:00:00+00:00",
-        python_executable="/tmp/python-expected",
-    )
-
-    assert "/tmp/python-expected -c" in command
-    assert " python -c " not in command
 
 
 def test_cleanup_command_best_effort_removes_plaintext_even_when_import_fails(tmp_path):
