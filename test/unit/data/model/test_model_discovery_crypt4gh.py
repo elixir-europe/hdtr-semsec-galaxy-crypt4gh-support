@@ -179,3 +179,21 @@ def test_resolve_discovered_extension_keeps_generic_crypt4gh_extension(monkeypat
 
     assert resolved == CRYPT4GH_DEFAULT_EXT
     assert registry.created_from == []
+
+
+def test_resolve_discovered_extension_requires_crypt4gh_without_marker_dir(monkeypatch):
+    registry = _RegistryForExtensionResolution()
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._first_existing_crypt4gh_marker_directory",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular",
+        job_working_directory="/tmp/job-dir",
+        require_crypt4gh_extension=True,
+    )
+
+    assert resolved == "tabular.c4gh"
+    assert registry.created_from == ["tabular"]

@@ -88,7 +88,11 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
         return getattr(self, "job", None)
 
     def _resolve_discovered_crypt4gh_extension(self, ext: str) -> str:
-        return _resolve_discovered_crypt4gh_extension(ext=ext, job_working_directory=self.job_working_directory)
+        return _resolve_discovered_crypt4gh_extension(
+            ext=ext,
+            job_working_directory=self.job_working_directory,
+            require_crypt4gh_extension=bool(self.crypt4gh_output_finalization_context()),
+        )
 
     def create_dataset(
         self,
@@ -637,14 +641,19 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             )
 
 
-def _resolve_discovered_crypt4gh_extension(*, ext: str, job_working_directory: str) -> str:
+def _resolve_discovered_crypt4gh_extension(
+    *,
+    ext: str,
+    job_working_directory: str,
+    require_crypt4gh_extension: bool = False,
+) -> str:
     """Resolve ext to encrypted datatype when crypt4gh staging is active for this job.
 
     If the crypt4gh staging marker directory exists, all discovered outputs for the job
     are expected to be encrypted by finalize_declared_crypt4gh_outputs.
     """
     marker_dir = _first_existing_crypt4gh_marker_directory(job_working_directory=job_working_directory)
-    if marker_dir is None:
+    if marker_dir is None and not require_crypt4gh_extension:
         return ext
 
     if ext == CRYPT4GH_DEFAULT_EXT or ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
