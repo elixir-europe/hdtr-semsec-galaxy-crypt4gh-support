@@ -214,7 +214,7 @@ def __handle_remote_command_line_building(commands_builder, job_wrapper: "Minima
         command = (
             "mkdir -p outputs; "
             "touch outputs/tool_stdout outputs/tool_stderr; "
-            'PYTHONPATH="$GALAXY_LIB:$PYTHONPATH" python "$GALAXY_LIB"/galaxy/tools/remote_tool_eval.py '
+            'PYTHONPATH="$GALAXY_LIB:$PYTHONPATH" "${GALAXY_PYTHON:-python}" "$GALAXY_LIB"/galaxy/tools/remote_tool_eval.py '
             ">> outputs/tool_stdout 2>> outputs/tool_stderr"
         )
         if for_pulsar:
