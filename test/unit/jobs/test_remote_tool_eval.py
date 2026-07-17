@@ -1,8 +1,10 @@
 import subprocess
+import sys
 
 from galaxy.tools.remote_tool_eval import (
     _crypt4gh_cleanup_command,
     _crypt4gh_finalize_postrun_command,
+    _python_executable_for_embedded_commands,
 )
 
 
@@ -84,3 +86,12 @@ def test_finalize_command_purges_plaintext_outputs_even_when_import_fails(tmp_pa
     assert not marker_path.exists()
     assert not extra_files_dir.exists()
     assert not extra_manifest_path.exists()
+
+
+def test_python_executable_for_embedded_commands_preserves_invocation_path(monkeypatch):
+    invocation_path = "/tmp/mock-venv/bin/python"
+    monkeypatch.setattr(sys, "executable", invocation_path)
+
+    resolved = _python_executable_for_embedded_commands()
+
+    assert resolved == invocation_path

@@ -61,7 +61,7 @@ class ToolAppConfig(NamedTuple):
     builds_file_path: str
     root: str
     is_admin_user: Callable
-    enable_crypt4gh_transparent_staging: bool = False
+    enable_crypt4gh_remote_execution_staging: bool = False
     admin_users: list = []
 
 
@@ -131,7 +131,9 @@ def _build_tool_app(
         builds_file_path=job_io.builds_file_path,
         root=tmpdir,
         is_admin_user=lambda _: job_io.user_context.is_admin,
-        enable_crypt4gh_transparent_staging=bool(metadata_params.get("enable_crypt4gh_transparent_staging", False)),
+        enable_crypt4gh_remote_execution_staging=bool(
+            metadata_params.get("enable_crypt4gh_remote_execution_staging", False)
+        ),
     )
     return ToolApp(
         sa_session=sa_session,
@@ -150,6 +152,16 @@ def _destination_params_for_remote_eval(job_io: JobIO) -> dict:
     # per-job destination params in integration test setups.
     destination_params.setdefault("tool_evaluation_strategy", "remote")
     return destination_params
+
+
+def _python_executable_for_embedded_commands() -> str:
+    """Return the active interpreter path without resolving venv symlinks.
+
+    Resolving ``sys.executable`` to a real path escapes virtualenv shims and can
+    drop environment-provided dependencies for embedded postrun/cleanup helpers.
+    """
+
+    return sys.executable
 
 
 def _render_embedded_python_command(*, galaxy_lib_for_finalize: str, python_executable: str, script: str) -> str:
@@ -339,7 +351,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
         metadata_params=metadata_params,
     )
     datatypes_registry = validate_and_load_datatypes_config(datatypes_config)
-    python_executable = os.path.realpath(sys.executable)
+    python_executable = _python_executable_for_embedded_commands()
     object_store = get_object_store(WORKING_DIRECTORY)
     import_store = store.imported_store_for_metadata(IMPORT_STORE_DIRECTORY)
     assert isinstance(import_store.sa_session, SessionlessContext)
