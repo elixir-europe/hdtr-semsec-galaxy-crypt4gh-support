@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from pathlib import Path
 
 from galaxy.tools.remote_tool_eval import (
     _crypt4gh_cleanup_command,
@@ -76,6 +77,7 @@ def test_finalize_command_purges_plaintext_outputs_even_when_import_fails(tmp_pa
         compute_keypair_id="mock-keypair",
         compute_keypair_expiration_date="2099-01-01T00:00:00+00:00",
         python_executable=str(bad_python),
+        allowed_root_paths=[str(tmp_path.resolve())],
     )
 
     completed = subprocess.run(["/bin/bash", "-c", command], check=False, capture_output=True, text=True)
@@ -86,6 +88,46 @@ def test_finalize_command_purges_plaintext_outputs_even_when_import_fails(tmp_pa
     assert not marker_path.exists()
     assert not extra_files_dir.exists()
     assert not extra_manifest_path.exists()
+
+
+def test_finalize_command_rejects_output_targets_outside_allowed_roots(tmp_path):
+    galaxy_lib_for_finalize = str(Path(__file__).resolve().parents[3] / "lib")
+
+    safe_root = tmp_path / "safe"
+    safe_root.mkdir(parents=True, exist_ok=True)
+    unsafe_output_path = tmp_path / "outside" / "dataset.dat"
+    unsafe_output_path.parent.mkdir(parents=True, exist_ok=True)
+    unsafe_output_path.write_text("PLAINTEXT")
+
+    metadata_params_path = tmp_path / "metadata" / "params.json"
+    metadata_params_path.parent.mkdir(parents=True)
+    metadata_params_path.write_text('{"outputs": {}}')
+
+    command = _crypt4gh_finalize_postrun_command(
+        output_targets=[
+            {
+                "association_name": "out1",
+                "output_path": str(unsafe_output_path),
+                "plaintext_path": str(safe_root / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+                "encrypted_marker_path": str(safe_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"),
+                "encrypted_ext": "txt.c4gh",
+                "clear_compute_keypair": True,
+            }
+        ],
+        metadata_params_path=str(metadata_params_path),
+        galaxy_lib_for_finalize=galaxy_lib_for_finalize,
+        reencryption_service_url="http://127.0.0.1:36667",
+        compute_public_key="public-key",
+        compute_keypair_id="mock-keypair",
+        compute_keypair_expiration_date="2099-01-01T00:00:00+00:00",
+        python_executable=sys.executable,
+        allowed_root_paths=[str(safe_root.resolve())],
+    )
+
+    completed = subprocess.run(["/bin/bash", "-c", command], check=False, capture_output=True, text=True)
+
+    assert completed.returncode != 0
+    assert "outside allowed roots" in completed.stderr
 
 
 def test_python_executable_for_embedded_commands_preserves_invocation_path(monkeypatch):

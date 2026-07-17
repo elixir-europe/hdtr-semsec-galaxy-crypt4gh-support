@@ -766,6 +766,7 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
             dataset_id=dataset_id,
             designation=designation,
         ),
+        allowed_root_paths=[str(Path(job_working_directory).resolve())],
         clear_compute_keypair=True,
     )
     return True

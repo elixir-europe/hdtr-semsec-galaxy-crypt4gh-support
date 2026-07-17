@@ -258,6 +258,7 @@ def _crypt4gh_finalize_postrun_command(
     compute_keypair_id: str,
     compute_keypair_expiration_date: object,
     python_executable: str,
+    allowed_root_paths: list[str],
 ) -> str:
     finalize_script = (
         "import json\n"
@@ -265,6 +266,11 @@ def _crypt4gh_finalize_postrun_command(
         "import shutil\n"
         "\n"
         f"_TARGETS = json.loads({json.dumps(json.dumps(output_targets))})\n"
+        f"_ALLOWED_ROOTS = json.loads({json.dumps(json.dumps(allowed_root_paths))})\n"
+        "if _ALLOWED_ROOTS:\n"
+        "    for _target in _TARGETS:\n"
+        "        if isinstance(_target, dict):\n"
+        "            _target['allowed_root_paths'] = list(_ALLOWED_ROOTS)\n"
         "\n"
         "def _safe_remove(path: str) -> None:\n"
         "    if not path:\n"
@@ -443,6 +449,7 @@ def main(TMPDIR, WORKING_DIRECTORY, IMPORT_STORE_DIRECTORY) -> None:
                     compute_keypair_id=cast(str, compute_keypair_id),
                     compute_keypair_expiration_date=compute_keypair_expiration_date,
                     python_executable=python_executable,
+                    allowed_root_paths=[os.path.abspath(WORKING_DIRECTORY)],
                 )
         command_line = build_crypt4gh_cleanup_wrapped_command(
             tool_command=command_line or "",

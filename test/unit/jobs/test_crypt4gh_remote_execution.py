@@ -1118,6 +1118,7 @@ def test_collect_declared_targets_prefers_false_path_and_tracks_real_path(tmp_pa
     assert len(targets) == 1
     assert targets[0]["output_path"] == str(false_path)
     assert targets[0]["dataset_output_path"] == str(real_path)
+    assert targets[0]["allowed_root_paths"] == [str(tmp_path.resolve())]
 
 
 def test_collect_declared_targets_does_not_log_extensions_as_warnings(tmp_path, caplog):
@@ -1969,6 +1970,44 @@ def test_finalize_declared_outputs_deletes_unprocessed_plaintext_outputs_when_an
 
     assert not first_output_path.exists()
     assert not second_output_path.exists()
+
+
+def test_finalize_declared_outputs_rejects_targets_outside_allowed_roots(tmp_path, monkeypatch):
+    allowed_root = tmp_path / "job_work"
+    allowed_root.mkdir(parents=True, exist_ok=True)
+
+    unsafe_output_path = tmp_path / "outside" / "leaked_output.txt"
+    unsafe_output_path.parent.mkdir(parents=True, exist_ok=True)
+    unsafe_output_path.write_text("plain\n")
+
+    def _encrypt_should_not_run(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise AssertionError("encryption should not run for out-of-scope output targets")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _encrypt_should_not_run,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="outside allowed roots"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(unsafe_output_path),
+                    "plaintext_path": str(allowed_root / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+                    "encrypted_marker_path": str(allowed_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "allowed_root_paths": [str(allowed_root)],
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert unsafe_output_path.exists()
 
 
 def test_finalize_about_to_persist_payload_writes_discovered_designation_map(tmp_path, monkeypatch):

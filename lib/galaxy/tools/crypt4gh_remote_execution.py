@@ -282,6 +282,7 @@ class _DeclaredCrypt4GHOutputTarget:
     encrypted_marker_path: str
     encrypted_ext: str
     clear_compute_keypair: bool
+    allowed_root_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -879,6 +880,7 @@ def collect_declared_crypt4gh_output_targets(
             encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
             encrypted_ext=encrypted_ext,
             clear_compute_keypair=True,
+            allowed_root_paths=(str(Path(working_directory).resolve()),),
         )
         targets.append(_declared_output_target_to_mapping(target))
 
@@ -960,6 +962,8 @@ def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) ->
         mapping["extra_files_output_path"] = target.extra_files_output_path
     if target.extra_files_manifest_path:
         mapping["extra_files_manifest_path"] = target.extra_files_manifest_path
+    if target.allowed_root_paths:
+        mapping["allowed_root_paths"] = list(target.allowed_root_paths)
     return mapping
 
 
@@ -1017,6 +1021,7 @@ def finalize_about_to_persist_crypt4gh_payload(
     discovered_marker_map_path: str = "",
     extra_files_output_path: str = "",
     extra_files_manifest_path: str = "",
+    allowed_root_paths: Sequence[str] = (),
     clear_compute_keypair: bool = True,
 ) -> None:
     concrete_target: dict[str, Any] = {
@@ -1036,6 +1041,44 @@ def finalize_about_to_persist_crypt4gh_payload(
         concrete_target["extra_files_output_path"] = extra_files_output_path
     if extra_files_manifest_path:
         concrete_target["extra_files_manifest_path"] = extra_files_manifest_path
+    if allowed_root_paths:
+        concrete_target["allowed_root_paths"] = [str(path) for path in allowed_root_paths if str(path)]
+
+    allowed_roots = _resolve_allowed_root_paths(concrete_target)
+    _assert_path_within_allowed_roots(
+        Path(output_path),
+        allowed_root_paths=allowed_roots,
+        context="finalize output_path",
+    )
+    if dataset_output_path:
+        _assert_path_within_allowed_roots(
+            Path(dataset_output_path),
+            allowed_root_paths=allowed_roots,
+            context="finalize dataset_output_path",
+        )
+    if encrypted_marker_path:
+        _assert_path_within_allowed_roots(
+            Path(encrypted_marker_path),
+            allowed_root_paths=allowed_roots,
+            context="finalize encrypted_marker_path",
+        )
+    if extra_files_output_path:
+        _assert_path_within_allowed_roots(
+            Path(extra_files_output_path),
+            allowed_root_paths=allowed_roots,
+            context="finalize extra_files_output_path",
+        )
+    if extra_files_manifest_path:
+        _assert_path_within_allowed_roots(
+            Path(extra_files_manifest_path),
+            allowed_root_paths=allowed_roots,
+            context="finalize extra_files_manifest_path",
+        )
+    _assert_path_within_allowed_roots(
+        Path(plaintext_path),
+        allowed_root_paths=allowed_roots,
+        context="finalize plaintext_path",
+    )
 
     if compute_keypair_expiration_date:
         _assert_key_valid_for_output_finalization(
@@ -1067,12 +1110,18 @@ def _purge_output_targets_after_finalization_failure(
     resolved_targets: Sequence[tuple[dict[str, Any], Path]],
 ) -> None:
     for concrete_target, output_path in resolved_targets:
+        allowed_roots = _resolve_allowed_root_paths(concrete_target)
         candidate_paths = [output_path]
         dataset_output_path_value = str(concrete_target.get("dataset_output_path", "") or "")
         if dataset_output_path_value:
             candidate_paths.append(Path(dataset_output_path_value))
         for candidate_path in candidate_paths:
             try:
+                _assert_path_within_allowed_roots(
+                    candidate_path,
+                    allowed_root_paths=allowed_roots,
+                    context="purge plaintext output candidate",
+                )
                 if candidate_path.exists():
                     candidate_path.unlink()
             except Exception:
@@ -1082,6 +1131,11 @@ def _purge_output_targets_after_finalization_failure(
         if marker_path_value:
             marker_path = Path(marker_path_value)
             try:
+                _assert_path_within_allowed_roots(
+                    marker_path,
+                    allowed_root_paths=allowed_roots,
+                    context="purge encrypted marker",
+                )
                 if marker_path.exists():
                     marker_path.unlink()
             except Exception:
@@ -1094,6 +1148,11 @@ def _purge_output_targets_after_finalization_failure(
         if extra_files_output_path_value:
             extra_files_output_path = Path(extra_files_output_path_value)
             try:
+                _assert_path_within_allowed_roots(
+                    extra_files_output_path,
+                    allowed_root_paths=allowed_roots,
+                    context="purge plaintext extra_files candidate",
+                )
                 if extra_files_output_path.exists() and extra_files_output_path.is_dir():
                     shutil.rmtree(extra_files_output_path)
             except Exception:
@@ -1106,6 +1165,11 @@ def _purge_output_targets_after_finalization_failure(
         if extra_files_manifest_path_value:
             extra_files_manifest_path = Path(extra_files_manifest_path_value)
             try:
+                _assert_path_within_allowed_roots(
+                    extra_files_manifest_path,
+                    allowed_root_paths=allowed_roots,
+                    context="purge extra_files manifest",
+                )
                 if extra_files_manifest_path.exists():
                     extra_files_manifest_path.unlink()
             except Exception:
@@ -1130,7 +1194,54 @@ def _iter_unique_existing_output_targets(
                 )
 
         for concrete_target in _resolve_output_targets(target):
+            allowed_roots = _resolve_allowed_root_paths(concrete_target)
             output_path = Path(concrete_target["output_path"])
+            _assert_path_within_allowed_roots(
+                output_path,
+                allowed_root_paths=allowed_roots,
+                context="finalize output_path",
+            )
+
+            dataset_output_path_value = str(concrete_target.get("dataset_output_path", "") or "")
+            if dataset_output_path_value:
+                _assert_path_within_allowed_roots(
+                    Path(dataset_output_path_value),
+                    allowed_root_paths=allowed_roots,
+                    context="finalize dataset_output_path",
+                )
+
+            marker_path_value = str(concrete_target.get("encrypted_marker_path", "") or "")
+            if marker_path_value:
+                _assert_path_within_allowed_roots(
+                    Path(marker_path_value),
+                    allowed_root_paths=allowed_roots,
+                    context="finalize encrypted_marker_path",
+                )
+
+            extra_files_output_path_value = str(concrete_target.get("extra_files_output_path", "") or "")
+            if extra_files_output_path_value:
+                _assert_path_within_allowed_roots(
+                    Path(extra_files_output_path_value),
+                    allowed_root_paths=allowed_roots,
+                    context="finalize extra_files_output_path",
+                )
+
+            extra_files_manifest_path_value = str(concrete_target.get("extra_files_manifest_path", "") or "")
+            if extra_files_manifest_path_value:
+                _assert_path_within_allowed_roots(
+                    Path(extra_files_manifest_path_value),
+                    allowed_root_paths=allowed_roots,
+                    context="finalize extra_files_manifest_path",
+                )
+
+            plaintext_path_value = str(concrete_target.get("plaintext_path", "") or "")
+            if plaintext_path_value:
+                _assert_path_within_allowed_roots(
+                    Path(plaintext_path_value),
+                    allowed_root_paths=allowed_roots,
+                    context="finalize plaintext_path",
+                )
+
             if not output_path.exists():
                 continue
 
@@ -1226,6 +1337,9 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, Any]]:
         extra_files_manifest_path = target.get("extra_files_manifest_path")
         if extra_files_manifest_path:
             concrete_target["extra_files_manifest_path"] = str(extra_files_manifest_path)
+        allowed_root_paths = target.get("allowed_root_paths")
+        if isinstance(allowed_root_paths, (list, tuple)):
+            concrete_target["allowed_root_paths"] = [str(path) for path in allowed_root_paths if str(path)]
         return [concrete_target]
 
     if target.get("discover_pattern") is not None:
@@ -1638,6 +1752,62 @@ def _verify_extra_files_manifest_evidence(
 def _safe_discovered_designation_token(designation: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", designation).strip("._-")
     return sanitized or "designation"
+
+
+def _resolve_allowed_root_paths(concrete_target: Mapping[str, Any]) -> tuple[Path, ...]:
+    configured_paths = concrete_target.get("allowed_root_paths")
+    resolved_paths: list[Path] = []
+
+    if isinstance(configured_paths, (list, tuple)):
+        for path_value in configured_paths:
+            try:
+                candidate = Path(str(path_value)).resolve(strict=False)
+            except Exception:
+                continue
+            resolved_paths.append(candidate)
+
+    if not resolved_paths:
+        default_paths = [
+            concrete_target.get("output_path"),
+            concrete_target.get("dataset_output_path"),
+            concrete_target.get("extra_files_output_path"),
+            concrete_target.get("extra_files_manifest_path"),
+            concrete_target.get("encrypted_marker_path"),
+            concrete_target.get("plaintext_path"),
+        ]
+        for path_value in default_paths:
+            if not path_value:
+                continue
+            try:
+                resolved_paths.append(Path(str(path_value)).resolve(strict=False).parent)
+            except Exception:
+                continue
+
+    deduped_paths: list[Path] = []
+    seen: set[str] = set()
+    for resolved_path in resolved_paths:
+        key = str(resolved_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_paths.append(resolved_path)
+
+    return tuple(deduped_paths)
+
+
+def _assert_path_within_allowed_roots(path: Path, *, allowed_root_paths: Sequence[Path], context: str) -> None:
+    if not allowed_root_paths:
+        return
+
+    resolved_path = path.resolve(strict=False)
+    for root_path in allowed_root_paths:
+        try:
+            resolved_path.relative_to(root_path)
+            return
+        except ValueError:
+            continue
+
+    raise Crypt4GHRemoteExecutionError(f"Crypt4GH {context} path is outside allowed roots: {path}")
 
 
 def _dataset_payload_path(dataset: Any) -> str:

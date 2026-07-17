@@ -553,6 +553,7 @@ def _maybe_finalize_crypt4gh_assigned_primary_output(
         encrypted_marker_path=os.path.join(marker_dir, f"ds_{dataset_id}.encrypted"),
         designation=str(discovered_designation or ""),
         discovered_marker_map_path=os.path.join(marker_dir, "discovered_designations.json"),
+        allowed_root_paths=[str(Path(job_working_directory).resolve())],
         clear_compute_keypair=True,
     )
 

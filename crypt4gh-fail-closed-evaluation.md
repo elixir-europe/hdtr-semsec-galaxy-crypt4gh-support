@@ -156,10 +156,37 @@ Key hardening already present on this branch/work item includes:
 
 ## Recommendations and proposed next steps
 
+### Progress tracker (updated)
+
+- [x] **Task 1 — Path-containment checks (highest priority)**
+  - Added canonical allowed-root checks for finalize and purge paths in:
+    - `lib/galaxy/tools/crypt4gh_remote_execution.py`
+    - `lib/galaxy/tools/remote_tool_eval.py`
+  - Added/updated tests:
+    - `test/unit/jobs/test_crypt4gh_remote_execution.py`
+      - `test_collect_declared_targets_prefers_false_path_and_tracks_real_path` (asserts `allowed_root_paths` propagation)
+      - `test_finalize_declared_outputs_rejects_targets_outside_allowed_roots`
+    - `test/unit/app/tools/test_crypt4gh_output_finalization_about_to_persist.py`
+      - `test_finalize_about_to_persist_payload_rejects_paths_outside_allowed_roots`
+    - `test/unit/jobs/test_remote_tool_eval.py`
+      - `test_finalize_command_rejects_output_targets_outside_allowed_roots`
+  - Verification run set (all passing):
+    - `pytest -q test/unit/jobs/test_crypt4gh_remote_execution.py -k "collect_declared_targets_prefers_false_path_and_tracks_real_path or finalize_declared_outputs_rejects_targets_outside_allowed_roots or finalize_declared_outputs_deletes_dataset_destination_when_encryption_fails or finalize_about_to_persist_payload_writes_discovered_designation_map"`
+    - `pytest -q test/unit/app/tools/test_crypt4gh_output_finalization_about_to_persist.py -k "rejects_paths_outside_allowed_roots or fail_closed_when_extra_files_manifest_missing_entries or encrypts_extra_files_and_writes_manifest"`
+    - `pytest -q test/unit/jobs/test_remote_tool_eval.py`
+    - `pytest -q test/unit/data/model/test_model_discovery_crypt4gh.py -k "about_to_persist_finalization"`
+    - `pytest -q test/integration/test_crypt4gh_remote_execution.py -k "discovered_dataset_extra_files_are_encrypted_and_manifested_for_crypt4gh_jobs or transparent_adapted_inputs_fail_closed_when_tool_evaluation_strategy_is_local"`
+
+- [ ] **Task 2 — Local evaluation tests and policy hardening**
+  - Still partially complete (transparent-adapted fail-closed checks in place).
+
+- [ ] **Task 3 — Pulsar wrapper parity tests/hardening**
+  - Not started in this change set; user requested a plan discussion pause before implementation.
+
 ### Immediate next steps (proposed)
 
 1. **Path-containment checks (highest priority)**
-   - Add strict canonical containment guards to purge/finalize deletion paths.
+   - ✅ Implemented in this cycle; move to maintenance/edge-case follow-up.
 2. **Local evaluation tests and policy hardening**
    - Prove fail-closed behavior for non-remote destinations or explicitly disable Crypt4GH transparent staging for local strategy.
 3. **Pulsar wrapper parity tests/hardening**
