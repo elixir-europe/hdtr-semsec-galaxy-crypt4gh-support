@@ -1137,7 +1137,10 @@ def test_collect_declared_targets_prefers_false_path_and_tracks_real_path(tmp_pa
     assert len(targets) == 1
     assert targets[0]["output_path"] == str(false_path)
     assert targets[0]["dataset_output_path"] == str(real_path)
-    assert targets[0]["allowed_root_paths"] == [str(tmp_path.resolve())]
+    assert targets[0]["allowed_root_paths"] == [
+        str(tmp_path.resolve()),
+        str(real_path.parent.resolve()),
+    ]
 
 
 def test_collect_declared_targets_logs_debug_resolution_payload(tmp_path, capsys):
@@ -1200,6 +1203,62 @@ def test_collect_declared_targets_logs_debug_resolution_payload(tmp_path, capsys
     assert debug_payload["output_path_source"] == "false_path"
     assert debug_payload["false_path"] == str(false_path)
     assert debug_payload["real_path"] == str(real_path)
+
+
+def test_collect_declared_targets_allows_dataset_output_path_parent_for_containment(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=7)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, false_path: str, real_path: str):
+            self.false_path = false_path
+            self.real_path = real_path
+
+    class _OutputJobIO:
+        def __init__(self, false_path: str, real_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(false_path, real_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    false_path = tmp_path / "jobs_directory" / "000" / "35" / "outputs" / "dataset_uuid.dat"
+    false_path.parent.mkdir(parents=True, exist_ok=True)
+    false_path.write_text("sample\n")
+
+    real_path = tmp_path / "objects" / "d" / "0" / "a" / "dataset_uuid.dat"
+    real_path.parent.mkdir(parents=True, exist_ok=True)
+    real_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(false_path), str(real_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path / "jobs_directory" / "000" / "35"),
+    )
+
+    assert len(targets) == 1
+    assert targets[0]["output_path"] == str(false_path)
+    assert targets[0]["dataset_output_path"] == str(real_path)
+    assert str((tmp_path / "jobs_directory" / "000" / "35").resolve()) in targets[0]["allowed_root_paths"]
+    assert str(real_path.parent.resolve()) in targets[0]["allowed_root_paths"]
 
 
 def test_collect_declared_targets_does_not_log_extensions_as_warnings(tmp_path, caplog):

@@ -920,7 +920,10 @@ def collect_declared_crypt4gh_output_targets(
             encrypted_marker_path=str(marker_dir / f"ds_{dataset_id}.encrypted"),
             encrypted_ext=encrypted_ext,
             clear_compute_keypair=True,
-            allowed_root_paths=(str(Path(working_directory).resolve()),),
+            allowed_root_paths=_declared_output_allowed_root_paths(
+                working_directory=working_directory,
+                dataset_output_path=cast(Optional[str], getattr(dataset_path, "real_path", None)),
+            ),
         )
         targets.append(_declared_output_target_to_mapping(target))
 
@@ -1045,6 +1048,24 @@ def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) ->
     if target.allowed_root_paths:
         mapping["allowed_root_paths"] = list(target.allowed_root_paths)
     return mapping
+
+
+def _declared_output_allowed_root_paths(*, working_directory: str, dataset_output_path: Optional[str]) -> tuple[str, ...]:
+    resolved_roots: list[str] = []
+    seen_roots: set[str] = set()
+
+    def _add_root(path_value: str) -> None:
+        resolved_root = str(Path(path_value).resolve())
+        if resolved_root in seen_roots:
+            return
+        seen_roots.add(resolved_root)
+        resolved_roots.append(resolved_root)
+
+    _add_root(working_directory)
+    if dataset_output_path:
+        _add_root(str(Path(dataset_output_path).resolve().parent))
+
+    return tuple(resolved_roots)
 
 
 def finalize_declared_crypt4gh_outputs(
