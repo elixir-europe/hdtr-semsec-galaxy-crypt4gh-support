@@ -325,6 +325,36 @@ def test_readiness_allows_explicit_crypt4gh_tool_inputs_without_remote_path():
     )
 
 
+def test_readiness_error_lists_all_remote_crypt4gh_requirements_for_transparent_inputs():
+    crypt4gh_dataset = _Dataset(
+        _DatasetMetadata(crypt4gh_header="header", expiration="2026-06-02T12:00:00+00:00"),
+        ext="fastqsanger.c4gh",
+    )
+    input_association = _InputDatasetAssociation(name="input_data", dataset=crypt4gh_dataset)
+    tool = _ReadinessTool(inputs={"input_data": _ReadinessToolInput(["fastqsanger"])})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError) as exc_info:
+        assert_crypt4gh_job_readiness(
+            job_io=_ReadinessJobIO([input_association]),
+            tool=tool,
+            app_config=_Config(
+                enable_crypt4gh_remote_execution_staging=False,
+                enable_crypt4gh_transparent_input_matching=False,
+                crypt4gh_reencryption_service_url="",
+            ),
+            destination_params={"tool_evaluation_strategy": "local"},
+            metadata_strategy="directory",
+            reencryption_service_url="",
+        )
+
+    message = str(exc_info.value)
+    assert "enable_crypt4gh_transparent_input_matching = true" in message
+    assert "enable_crypt4gh_remote_execution_staging = true" in message
+    assert "tool_evaluation_strategy = remote" in message
+    assert "metadata_strategy = extended" in message
+    assert "crypt4gh_reencryption_service_url" in message
+
+
 def test_prepare_job_no_longer_exposes_legacy_staging_hook():
     assert not hasattr(BaseJobRunner, "_apply_crypt4gh_staging")
 
@@ -983,6 +1013,60 @@ def test_collect_declared_targets_ignores_legacy_discovered_collectors(tmp_path)
     assert "discover_pattern" not in targets[0]
 
 
+def test_collect_declared_targets_skips_discovery_container_outputs_without_resolved_extension(tmp_path):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=4)
+            self.ext = "auto"
+
+    class _DatasetPath:
+        def __init__(self, path: str):
+            self.false_path = path
+            self.real_path = path
+
+    class _OutputJobIO:
+        def __init__(self, output_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(output_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    class _Collector:
+        discover_via = "tool_provided_metadata"
+        directory = "outputs"
+        pattern = r".*"
+        assign_primary_output = False
+
+    class _ToolOutput:
+        format = "input"
+        from_work_dir = None
+        dataset_collector_descriptions = [_Collector()]
+
+    output_path = tmp_path / "dataset_4.dat"
+    output_path.write_text("sample\n")
+
+    targets = collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(output_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    assert targets == []
+
+
 def test_collect_declared_targets_prefers_false_path_and_tracks_real_path(tmp_path):
     class _OutputDataset:
         def __init__(self):
@@ -1619,6 +1703,81 @@ def test_pre_success_verifier_fails_for_missing_extra_files_manifest_for_discove
                 _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(71, str(dataset_path))),
             ],
         )
+
+
+def test_pre_success_verifier_accepts_designation_extra_files_manifest_for_discovered_output(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_81.encrypted").write_text("tabular.c4gh\n")
+    (marker_dir / "discovered_designations.json").write_text(json.dumps({"sample1": "tabular.c4gh"}))
+    (marker_dir / "designation_sample1.extra_files_manifest.json").write_text(
+        json.dumps({"files": {"child.txt": "tabular.c4gh"}})
+    )
+
+    dataset_path = tmp_path / "objects" / "dataset_81.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    extra_files_path = tmp_path / "objects" / "dataset_81_files"
+    extra_files_path.mkdir(parents=True, exist_ok=True)
+    (extra_files_path / "child.txt").write_bytes(b"crypt4ghextra")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+        working_directory=str(tmp_path),
+        output_dataset_associations=[
+            _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(81, str(dataset_path))),
+        ],
+    )
+
+
+def test_pre_success_verifier_ignores_placeholder_container_output_without_payload_marker(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "discovered_designations.json").write_text(json.dumps({"sample1": "tabular.c4gh"}))
+
+    container_dataset_path = tmp_path / "objects" / "dataset_90.dat"
+    container_dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    container_dataset_path.write_bytes(b"container")
+
+    discovered_dataset_path = tmp_path / "objects" / "dataset_91.dat"
+    discovered_dataset_path.write_bytes(b"crypt4ghpayload")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str, designation: str = ""):
+            self.id = dataset_id
+            self._file_name = file_name
+            self.designation = designation
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+        working_directory=str(tmp_path),
+        output_dataset_associations=[
+            _DatasetAssociation("output", _DatasetObject(90, str(container_dataset_path))),
+            _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(91, str(discovered_dataset_path))),
+        ],
+    )
 
 
 def test_pre_success_verifier_accepts_discovered_markers_written_under_working_subdir(tmp_path):

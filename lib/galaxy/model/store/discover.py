@@ -10,6 +10,7 @@ import abc
 import hashlib
 import logging
 import os
+import re
 from pathlib import Path
 from collections.abc import (
     Callable,
@@ -719,8 +720,10 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
     if not os.path.isfile(output_path):
         raise RuntimeError(f"Crypt4GH discovered output path does not exist: {output_path}")
 
-    dataset_object = getattr(primary_data, "dataset", None)
-    dataset_id = getattr(dataset_object, "id", None)
+    dataset_object, dataset_id = _resolve_dataset_for_discovered_crypt4gh_target(
+        model_persistence_context=model_persistence_context,
+        primary_data=primary_data,
+    )
     designation = str(getattr(primary_data, "designation", "") or "")
     if not isinstance(dataset_id, int) and not designation:
         raise RuntimeError("Crypt4GH discovered output is missing both persisted dataset id and designation")
@@ -758,12 +761,52 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
         designation=designation,
         discovered_marker_map_path=str(marker_dir / "discovered_designations.json"),
         extra_files_output_path=str(extra_files_path or ""),
-        extra_files_manifest_path=(
-            str(marker_dir / f"ds_{dataset_id}.extra_files_manifest.json") if isinstance(dataset_id, int) else ""
+        extra_files_manifest_path=_resolved_extra_files_manifest_path(
+            marker_dir=marker_dir,
+            dataset_id=dataset_id,
+            designation=designation,
         ),
         clear_compute_keypair=True,
     )
     return True
+
+
+def _resolved_extra_files_manifest_path(*, marker_dir: Path, dataset_id: Optional[int], designation: str) -> str:
+    if isinstance(dataset_id, int):
+        return str(marker_dir / f"ds_{dataset_id}.extra_files_manifest.json")
+
+    if designation:
+        designation_token = _safe_discovered_designation_token(designation)
+        return str(marker_dir / f"designation_{designation_token}.extra_files_manifest.json")
+
+    return ""
+
+
+def _safe_discovered_designation_token(designation: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", designation).strip("._-")
+    return sanitized or "designation"
+
+
+def _resolve_dataset_for_discovered_crypt4gh_target(
+    *,
+    model_persistence_context: ModelPersistenceContext,
+    primary_data: Any,
+) -> tuple[Any, Optional[int]]:
+    dataset_object = getattr(primary_data, "dataset", None)
+    dataset_id = getattr(dataset_object, "id", None)
+    if isinstance(dataset_id, int):
+        return dataset_object, dataset_id
+
+    sa_session = getattr(model_persistence_context, "sa_session", None)
+    flush = getattr(sa_session, "flush", None)
+    if callable(flush):
+        flush()
+        dataset_object = getattr(primary_data, "dataset", None)
+        dataset_id = getattr(dataset_object, "id", None)
+        if isinstance(dataset_id, int):
+            return dataset_object, dataset_id
+
+    return dataset_object, None
 
 
 class PermissionProvider(metaclass=abc.ABCMeta):

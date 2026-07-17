@@ -785,12 +785,19 @@ class Registry:
             "sniff_prefix": binary.Crypt4GHDynamicCompressedArchive.sniff_prefix,
         }
 
-        crypt4gh_datatype_class: type[Data] = type(
-            f"{datatype_class_name}Crypt4ghRuntime",
-            (
+        if issubclass(binary.Crypt4GHDynamicCompressedArchive, datatype_class):
+            bases: tuple[type, ...] = (binary.Crypt4GHDynamicCompressedArchive,)
+        elif issubclass(datatype_class, binary.Crypt4GHDynamicCompressedArchive):
+            bases = (datatype_class,)
+        else:
+            bases = (
                 datatype_class,
                 binary.Crypt4GHDynamicCompressedArchive,
-            ),
+            )
+
+        crypt4gh_datatype_class: type[Data] = type(
+            f"{datatype_class_name}Crypt4ghRuntime",
+            bases,
             attributes,
         )
         crypt4gh_datatype_instance = crypt4gh_datatype_class()

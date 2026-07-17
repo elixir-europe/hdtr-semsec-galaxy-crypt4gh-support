@@ -28,7 +28,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 | **Extension resolution + marker application** (`_resolve_discovered_crypt4gh_extension`, `_apply_crypt4gh_marked_extensions`) | `require_crypt4gh_extension` hardens resolution when finalization context is active; marker-based extension re-application exists post-collection. | **Covered (partial)** |
 | **Pre-success output evidence verifier** (`verify_crypt4gh_pre_success_output_evidence`) | Validates marker and mapping evidence before successful job completion; can force job error on verifier failure. | **Covered (strong)** |
 | **Error-state cleanup in remote eval** (`remote_tool_eval.py` exception handler, cleanup snippet) | Best-effort cleanup invoked on remote eval failures before script finalization. | **Covered (partial)** |
-| **Local (non-remote) evaluation path** | Crypt4GH remote finalization flow is not executed when destination strategy is local. | **Gap** |
+| **Local (non-remote) evaluation path** | Transparent-adapted Crypt4GH inputs now fail closed during job-readiness checks unless full remote prerequisites are present (`tool_evaluation_strategy=remote`, `metadata_strategy=extended`, remote staging + matching enabled, reencryption URL set). | **Covered (guarded fail-closed)** |
 | **Pulsar / `for_pulsar` branch behavior parity** | Known divergence risk in wrapper/cleanup equivalence depending on command assembly path. | **Gap** |
 | **Out-of-tree / arbitrary path payload writes** | Finalize/purge logic can be bypassed by tool writes outside tracked targets/job dir. | **Gap** |
 
@@ -39,11 +39,13 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 1) Local vs remote evaluation
 
 - **Gap**: Crypt4GH finalization/cleanup orchestration is tied to remote tool-evaluation flow; local destinations can skip equivalent finalization safeguards.
-- **Mitigated?**: **Partially**. Remote path is hardened; local path remains an exposure surface if transparent staging is enabled for local runs.
+- **Mitigated?**: **Yes (for transparent-adapted inputs)**. A fail-closed readiness guard now rejects local-strategy jobs when transparent input adaptation would otherwise be required.
+- **Validation added**:
+  - readiness-unit coverage for remote prerequisite combinations,
+  - integration coverage asserting local strategy is rejected for transparent-adapted Crypt4GH inputs.
 - **Still needed**:
-  - explicit local-path policy (disable transparent staging locally or add equivalent local finalization hook),
-  - tests proving plaintext cannot remain for local strategy.
-- **Priority / severity**: **High**.
+  - broader parity testing for non-transparent/edge local paths where appropriate.
+- **Priority / severity**: **Reduced (remaining risk now Medium, mostly parity/coverage-related)**.
 
 ## 2) Marker-dir timing / race conditions
 

@@ -560,10 +560,22 @@ def assert_crypt4gh_job_readiness(
         getattr(app_config, "enable_crypt4gh_transparent_input_matching", False)
     )
 
+    required_remote_settings = [
+        "enable_crypt4gh_transparent_input_matching = true",
+        "enable_crypt4gh_remote_execution_staging = true",
+        "tool_evaluation_strategy = remote",
+        "metadata_strategy = extended",
+        "crypt4gh_reencryption_service_url",
+    ]
+
+    def _missing_remote_settings_summary() -> str:
+        return "; required settings: " + ", ".join(required_remote_settings)
+
     if remote_execution_staging_enabled and not transparent_input_matching_enabled:
         raise Crypt4GHRemoteExecutionError(
             "Invalid Crypt4GH configuration: enable_crypt4gh_remote_execution_staging requires "
             "enable_crypt4gh_transparent_input_matching = true"
+            + _missing_remote_settings_summary()
         )
 
     transparent_adapted_inputs = _collect_transparent_adapted_crypt4gh_input_names(job_io=job_io, tool=tool)
@@ -573,16 +585,19 @@ def assert_crypt4gh_job_readiness(
     if not remote_execution_staging_enabled:
         raise Crypt4GHRemoteExecutionError(
             "Transparent Crypt4GH input adaptation requires enable_crypt4gh_remote_execution_staging = true"
+            + _missing_remote_settings_summary()
         )
 
     if destination_params.get("tool_evaluation_strategy") != "remote":
         raise Crypt4GHRemoteExecutionError(
             "Transparent Crypt4GH input adaptation requires tool_evaluation_strategy = remote"
+            + _missing_remote_settings_summary()
         )
 
     if metadata_strategy != "extended":
         raise Crypt4GHRemoteExecutionError(
             "Transparent Crypt4GH input adaptation requires metadata_strategy = extended"
+            + _missing_remote_settings_summary()
         )
 
     effective_reencryption_service_url = str(
@@ -593,6 +608,7 @@ def assert_crypt4gh_job_readiness(
     if not effective_reencryption_service_url:
         raise Crypt4GHRemoteExecutionError(
             "Transparent Crypt4GH input adaptation requires crypt4gh_reencryption_service_url"
+            + _missing_remote_settings_summary()
         )
 
 
@@ -836,6 +852,8 @@ def collect_declared_crypt4gh_output_targets(
 
         base_ext = _resolve_base_output_extension(dataset=dataset, tool_output=tool_output)
         if base_ext is None:
+            if _has_output_collectors(tool_output):
+                continue
             raise Crypt4GHRemoteExecutionError(
                 f"Crypt4GH output target '{output_name}' could not resolve encrypted output extension"
             )
@@ -872,6 +890,13 @@ def _is_discovery_routed_output(tool_output: Any) -> bool:
         return False
     collectors = list(getattr(tool_output, "dataset_collector_descriptions", []) or [])
     return any(bool(getattr(collector, "assign_primary_output", False)) for collector in collectors)
+
+
+def _has_output_collectors(tool_output: Any) -> bool:
+    if tool_output is None:
+        return False
+    collectors = list(getattr(tool_output, "dataset_collector_descriptions", []) or [])
+    return len(collectors) > 0
 
 
 def _resolve_output_name_for_tool_lookup(*, output_name: str, tool_outputs: Mapping[str, Any]) -> Optional[str]:
@@ -1348,17 +1373,32 @@ def verify_crypt4gh_pre_success_output_evidence(
         return
 
     discovered_designations: set[str] = set()
-    dataset_candidates: dict[int, dict[str, Any]] = {}
+    discovered_parent_output_names: set[str] = set()
     for output_dataset_assoc in output_dataset_associations:
         association_name = getattr(output_dataset_assoc, "name", "")
         designation = _resolve_discovered_designation(association_name)
         if designation:
             discovered_designations.add(designation)
 
+        discovered_parent_output_name = _resolve_discovered_parent_output_name(association_name)
+        if discovered_parent_output_name:
+            discovered_parent_output_names.add(discovered_parent_output_name)
+
+    dataset_candidates: dict[int, dict[str, Any]] = {}
+    for output_dataset_assoc in output_dataset_associations:
+        association_name = getattr(output_dataset_assoc, "name", "")
+        designation = _resolve_discovered_designation(association_name)
+        if not designation and association_name in discovered_parent_output_names:
+            continue
+
         dataset_instance = getattr(output_dataset_assoc, "dataset", None)
         dataset = getattr(dataset_instance, "dataset", None)
         dataset_id = getattr(dataset, "id", None)
         if not isinstance(dataset_id, int):
+            continue
+
+        dataset_payload_path = _dataset_payload_path(dataset)
+        if not dataset_payload_path:
             continue
 
         require_payload_marker = not bool(designation)
@@ -1367,9 +1407,12 @@ def verify_crypt4gh_pre_success_output_evidence(
             dataset_candidates[dataset_id] = {
                 "dataset": dataset,
                 "require_payload_marker": require_payload_marker,
+                "discovered_designation": designation,
             }
         else:
             candidate["require_payload_marker"] = bool(candidate.get("require_payload_marker", False)) or require_payload_marker
+            if designation and not candidate.get("discovered_designation"):
+                candidate["discovered_designation"] = designation
 
     diagnostics: list[str] = []
     for dataset_id in sorted(dataset_candidates):
@@ -1380,6 +1423,7 @@ def verify_crypt4gh_pre_success_output_evidence(
             marker_dirs=marker_dirs,
             dataset_id=dataset_id,
             dataset=candidate.get("dataset"),
+            discovered_designation=str(candidate.get("discovered_designation", "") or ""),
             diagnostics=diagnostics,
         )
 
@@ -1430,6 +1474,17 @@ def _resolve_discovered_designation(association_name: Any) -> str:
     if designation.endswith("__"):
         designation = designation[:-2]
     return designation
+
+
+def _resolve_discovered_parent_output_name(association_name: Any) -> str:
+    if not isinstance(association_name, str) or not association_name.startswith("__new_primary_file_"):
+        return ""
+
+    split_name = association_name[len("__new_primary_file_") :].split("|", 1)
+    if len(split_name) != 2:
+        return ""
+
+    return split_name[0]
 
 
 def _verify_payload_marker_evidence(*, marker_dirs: Sequence[Path], dataset_id: int, diagnostics: list[str]) -> None:
@@ -1505,7 +1560,12 @@ def _verify_discovered_mapping_evidence(
 
 
 def _verify_extra_files_manifest_evidence(
-    *, marker_dirs: Sequence[Path], dataset_id: int, dataset: Any, diagnostics: list[str]
+    *,
+    marker_dirs: Sequence[Path],
+    dataset_id: int,
+    dataset: Any,
+    discovered_designation: str,
+    diagnostics: list[str],
 ) -> None:
     dataset_path = _dataset_payload_path(dataset)
     if not dataset_path:
@@ -1527,7 +1587,22 @@ def _verify_extra_files_manifest_evidence(
         return
 
     manifest_paths = [marker_dir / f"ds_{dataset_id}.extra_files_manifest.json" for marker_dir in marker_dirs]
-    existing_paths = [manifest_path for manifest_path in manifest_paths if manifest_path.exists()]
+    discovered_designation = discovered_designation or _resolve_discovered_designation(getattr(dataset, "designation", ""))
+    if discovered_designation:
+        designation_token = _safe_discovered_designation_token(discovered_designation)
+        manifest_paths.extend(
+            marker_dir / f"designation_{designation_token}.extra_files_manifest.json" for marker_dir in marker_dirs
+        )
+
+    existing_paths: list[Path] = []
+    seen_manifest_paths: set[str] = set()
+    for manifest_path in manifest_paths:
+        manifest_path_key = str(manifest_path)
+        if manifest_path_key in seen_manifest_paths:
+            continue
+        seen_manifest_paths.add(manifest_path_key)
+        if manifest_path.exists():
+            existing_paths.append(manifest_path)
     if not existing_paths:
         diagnostics.append(f"extra_files manifest missing for dataset_id={dataset_id}")
         return
@@ -1558,6 +1633,11 @@ def _verify_extra_files_manifest_evidence(
         diagnostics.append(f"extra_files manifest invalid for dataset_id={dataset_id}")
     elif saw_unreadable_manifest:
         diagnostics.append(f"extra_files manifest unreadable for dataset_id={dataset_id}")
+
+
+def _safe_discovered_designation_token(designation: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9._-]", "_", designation).strip("._-")
+    return sanitized or "designation"
 
 
 def _dataset_payload_path(dataset: Any) -> str:

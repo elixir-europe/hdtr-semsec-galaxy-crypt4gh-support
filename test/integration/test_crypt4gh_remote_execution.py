@@ -369,6 +369,29 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         super().setUp()
         self.dataset_populator = DatasetPopulator(self.galaxy_interactor)
 
+    @staticmethod
+    def _resolve_marker_dir(job_working_directory: str) -> Path:
+        working_path = Path(job_working_directory)
+        candidate_dirs = [
+            working_path / "_c4gh_stage" / "outputs",
+            working_path / "working" / "_c4gh_stage" / "outputs",
+        ]
+        for candidate_dir in candidate_dirs:
+            if candidate_dir.exists():
+                return candidate_dir
+        return candidate_dirs[0]
+
+    @staticmethod
+    def _resolve_extra_files_manifest_path(*, marker_dir: Path, dataset_id: int, designation: str) -> Path:
+        dataset_manifest_path = marker_dir / f"ds_{dataset_id}.extra_files_manifest.json"
+        if dataset_manifest_path.exists():
+            return dataset_manifest_path
+
+        safe_designation = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in designation).strip("._-")
+        if not safe_designation:
+            safe_designation = "designation"
+        return marker_dir / f"designation_{safe_designation}.extra_files_manifest.json"
+
     def test_output_format_declared_outputs_are_encrypted_for_crypt4gh_jobs(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
@@ -534,7 +557,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert job is not None
         job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
         assert job_working_directory is not None
-        marker_dir = Path(job_working_directory) / "_c4gh_stage" / "outputs"
+        marker_dir = self._resolve_marker_dir(job_working_directory)
         assert marker_dir.exists(), marker_dir
         assert list(marker_dir.glob("path_*.encrypted")) == []
 
@@ -625,10 +648,14 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert job is not None
         job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
         assert job_working_directory is not None
-        marker_dir = Path(job_working_directory) / "_c4gh_stage" / "outputs"
+        marker_dir = self._resolve_marker_dir(job_working_directory)
         assert marker_dir.exists(), marker_dir
 
-        manifest_path = marker_dir / f"ds_{dataset_id}.extra_files_manifest.json"
+        manifest_path = self._resolve_extra_files_manifest_path(
+            marker_dir=marker_dir,
+            dataset_id=dataset_id,
+            designation="sample1",
+        )
         assert manifest_path.exists(), manifest_path
         manifest_payload = json.loads(manifest_path.read_text())
         assert sorted(manifest_payload["files"].keys()) == ["bar", "foo"]
@@ -831,6 +858,61 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
         assert job["state"] == "error"
         assert "compute key expired before output finalization" in job.get("tool_stderr", "")
+
+    def test_transparent_adapted_inputs_fail_closed_when_tool_evaluation_strategy_is_local(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        previous_strategy = getattr(self._app.config, "tool_evaluation_strategy", None)
+        self._app.config.tool_evaluation_strategy = "local"
+        try:
+            run_response = self.dataset_populator.run_tool(
+                "inheritance_simple",
+                {"input1": {"src": "hda", "id": input_dataset_id}},
+                history_id,
+            )
+            job_api_id = run_response["jobs"][0]["id"]
+            self.dataset_populator.wait_for_job(job_api_id, assert_ok=False)
+            job = self.dataset_populator.get_job_details(job_api_id, full=True).json()
+        finally:
+            self._app.config.tool_evaluation_strategy = previous_strategy
+
+        assert job["state"] == "error", job
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job_model = sa_session.get(model.Job, job_database_id)
+        assert job_model is not None
+        failure_text = "\n".join(
+            filter(
+                None,
+                [
+                    job.get("tool_stderr", ""),
+                    job.get("stderr", ""),
+                    job_model.tool_stderr or "",
+                    job_model.info or "",
+                    job_model.traceback or "",
+                ],
+            )
+        )
+        assert "tool_evaluation_strategy = remote" in failure_text
+        assert "enable_crypt4gh_transparent_input_matching = true" in failure_text
+        assert "enable_crypt4gh_remote_execution_staging = true" in failure_text
+        assert "metadata_strategy = extended" in failure_text
+        assert "crypt4gh_reencryption_service_url" in failure_text
 
 instance = integration_util.integration_module_instance(TestCrypt4GHRemoteExecutionIntegration)
 
