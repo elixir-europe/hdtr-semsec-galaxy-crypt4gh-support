@@ -893,10 +893,20 @@ def collect_declared_crypt4gh_output_targets(
             datatypes_registry=datatypes_registry,
             base_ext=base_ext,
         )
-        output_path = _resolve_output_path(
+        output_path, output_path_source = _resolve_output_path_with_source(
             dataset_path=dataset_path,
             tool_output=tool_output,
             tool_working_directory=tool_working_directory,
+        )
+        _print_declared_output_target_debug(
+            output_name=output_name,
+            output_name_for_tool_lookup=output_name_for_tool_lookup,
+            output_path=output_path,
+            output_path_source=output_path_source,
+            from_work_dir=getattr(tool_output, "from_work_dir", None),
+            false_path=getattr(dataset_path, "false_path", None),
+            real_path=getattr(dataset_path, "real_path", None),
+            working_directory=working_directory,
         )
 
         target = _DeclaredCrypt4GHOutputTarget(
@@ -963,18 +973,58 @@ def _ensure_crypt4gh_output_datatype(*, datatypes_registry: Any, base_ext: str) 
 
 
 def _resolve_output_path(*, dataset_path: Any, tool_output: Any, tool_working_directory: Path) -> str:
+    output_path, _output_path_source = _resolve_output_path_with_source(
+        dataset_path=dataset_path,
+        tool_output=tool_output,
+        tool_working_directory=tool_working_directory,
+    )
+    return output_path
+
+
+def _resolve_output_path_with_source(
+    *, dataset_path: Any, tool_output: Any, tool_working_directory: Path
+) -> tuple[str, str]:
     from_work_dir = getattr(tool_output, "from_work_dir", None) if tool_output else None
     if from_work_dir:
         from_work_dir_path = Path(str(from_work_dir))
         if from_work_dir_path.is_absolute():
-            return str(from_work_dir_path)
-        return str(tool_working_directory / from_work_dir_path)
-    return cast(
-        str,
-        getattr(dataset_path, "false_path", None)
-        or getattr(dataset_path, "real_path", None)
-        or str(dataset_path),
-    )
+            return str(from_work_dir_path), "from_work_dir:absolute"
+        return str(tool_working_directory / from_work_dir_path), "from_work_dir:relative"
+
+    false_path = getattr(dataset_path, "false_path", None)
+    if false_path:
+        return cast(str, false_path), "false_path"
+
+    real_path = getattr(dataset_path, "real_path", None)
+    if real_path:
+        return cast(str, real_path), "real_path"
+
+    return str(dataset_path), "dataset_path:str"
+
+
+def _print_declared_output_target_debug(
+    *,
+    output_name: str,
+    output_name_for_tool_lookup: str,
+    output_path: str,
+    output_path_source: str,
+    from_work_dir: Any,
+    false_path: Any,
+    real_path: Any,
+    working_directory: str,
+) -> None:
+    debug_payload = {
+        "event": "crypt4gh_declared_output_target",
+        "output_name": output_name,
+        "tool_output_name": output_name_for_tool_lookup,
+        "output_path": output_path,
+        "output_path_source": output_path_source,
+        "from_work_dir": str(from_work_dir or ""),
+        "false_path": str(false_path or ""),
+        "real_path": str(real_path or ""),
+        "working_directory": working_directory,
+    }
+    print(f"CRYPT4GH_DEBUG {json.dumps(debug_payload, sort_keys=True)}", flush=True)
 
 
 def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, Any]:
