@@ -3027,14 +3027,18 @@ galaxy:
   #enable_beta_tool_formats: false
 
   # Allow crypt4gh-compressed datatypes to match compatible plaintext
-  # tool inputs. This should only be enabled when crypt4gh input staging
-  # is configured.
-  #enable_crypt4gh_transparent_staging: false
+  # tool inputs during upload/tool-input/workflow compatibility checks.
+  #enable_crypt4gh_transparent_input_matching: false
+
+  # Enable remote Crypt4GH transparent execution staging for jobs that
+  # require plaintext-compatible execution of Crypt4GH inputs. This
+  # requires enable_crypt4gh_transparent_input_matching: true.
+  #enable_crypt4gh_remote_execution_staging: false
 
   # URL of the crypt4gh re-encryptor service compute-side recryptor B endpoint. Galaxy
   # sends header-only re-encryption requests to compute-side recryptor B
   # during remote tool execution and never transfers encrypted payload
   # bodies.
   # Example: "https://reencryptor.example.org" Required when
-  # enable_crypt4gh_transparent_staging is true.
+  # enable_crypt4gh_remote_execution_staging is true.
   #crypt4gh_reencryption_service_url: null

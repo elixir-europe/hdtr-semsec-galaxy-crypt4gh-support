@@ -5938,14 +5938,25 @@
 :Type: bool
 
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-``enable_crypt4gh_transparent_staging``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``enable_crypt4gh_transparent_input_matching``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 :Description:
     Allow crypt4gh-compressed datatypes to match compatible plaintext
-    tool inputs. This should only be enabled when crypt4gh input
-    staging is configured.
+    tool inputs during upload/tool-input/workflow compatibility checks.
+:Default: ``false``
+:Type: bool
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``enable_crypt4gh_remote_execution_staging``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Description:
+    Enable remote Crypt4GH transparent execution staging for jobs that
+    require plaintext-compatible execution of Crypt4GH inputs. This
+    requires enable_crypt4gh_transparent_input_matching to be true.
 :Default: ``false``
 :Type: bool
 
@@ -5959,6 +5970,6 @@
     re-encryption requests to this service during remote tool execution
     and never transfers encrypted payload bodies. Example:
     "https://reencryptor.example.org" Required when
-    enable_crypt4gh_transparent_staging is true.
+    enable_crypt4gh_remote_execution_staging is true.
 :Default: ``None``
 :Type: str

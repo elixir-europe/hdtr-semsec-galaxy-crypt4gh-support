@@ -4384,13 +4384,22 @@ mapping:
         desc: |
           Enable beta tool formats (yaml, cwl, ...) which is a prerequisite for user defined tools.
 
-      enable_crypt4gh_transparent_staging:
+      enable_crypt4gh_transparent_input_matching:
         type: bool
         default: false
         required: false
         desc: |
-          Allow crypt4gh-compressed datatypes to match compatible plaintext tool inputs.
-          This should only be enabled when crypt4gh input staging is configured.
+          Allow crypt4gh-compressed datatypes to match compatible plaintext tool inputs
+          during upload/tool-input/workflow compatibility checks.
+
+      enable_crypt4gh_remote_execution_staging:
+        type: bool
+        default: false
+        required: false
+        desc: |
+          Enable remote Crypt4GH transparent execution staging for jobs that require
+          plaintext-compatible execution of Crypt4GH inputs. This setting requires
+          ``enable_crypt4gh_transparent_input_matching`` to also be true.
 
       crypt4gh_reencryption_service_url:
         type: str
@@ -4401,4 +4410,4 @@ mapping:
           Galaxy sends header-only re-encryption requests to this service during
           remote tool execution and never transfers encrypted payload bodies.
           Example: "https://reencryptor.example.org"
-          Required when enable_crypt4gh_transparent_staging is true.
+          Required when enable_crypt4gh_remote_execution_staging is true.

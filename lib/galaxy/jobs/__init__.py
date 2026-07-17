@@ -2691,6 +2691,33 @@ class MinimalJobWrapper(HasResourceParameters):
     ):
         # extension could still be 'auto' if this is the upload tool.
         job = self.get_job()
+
+        from galaxy.tools.crypt4gh_remote_execution import assert_crypt4gh_job_readiness
+
+        destination_params = dict(getattr(job, "destination_params", {}) or {})
+        tool_evaluation_strategy = self.get_destination_configuration(
+            "tool_evaluation_strategy",
+            destination_params.get("tool_evaluation_strategy"),
+        )
+        if tool_evaluation_strategy is not None:
+            destination_params.setdefault("tool_evaluation_strategy", tool_evaluation_strategy)
+
+        effective_reencryption_service_url = cast(
+            Optional[str],
+            self.get_destination_configuration(
+                "crypt4gh_reencryption_service_url",
+                getattr(self.app.config, "crypt4gh_reencryption_service_url", None),
+            ),
+        )
+        assert_crypt4gh_job_readiness(
+            job_io=self.job_io,
+            tool=self.tool,
+            app_config=self.app.config,
+            destination_params=destination_params,
+            metadata_strategy=cast(Optional[str], self.metadata_strategy) or "",
+            reencryption_service_url=effective_reencryption_service_url,
+        )
+
         if set_extension:
             for output_dataset_assoc in job.output_datasets:
                 if output_dataset_assoc.dataset.ext == "auto":
@@ -2740,10 +2767,14 @@ class MinimalJobWrapper(HasResourceParameters):
             max_discovered_files=self.app.config.max_discovered_files,
             validate_outputs=self.validate_outputs,
             link_data_only=self.__link_file_check(),
-            enable_crypt4gh_transparent_staging=bool(
-                getattr(self.app.config, "enable_crypt4gh_transparent_staging", False)
+            enable_crypt4gh_transparent_input_matching=bool(
+                getattr(self.app.config, "enable_crypt4gh_transparent_input_matching", False)
+            ),
+            enable_crypt4gh_remote_execution_staging=bool(
+                getattr(self.app.config, "enable_crypt4gh_remote_execution_staging", False)
             ),
             crypt4gh_reencryption_service_url=getattr(self.app.config, "crypt4gh_reencryption_service_url", None),
+            metadata_strategy=cast(Optional[str], self.metadata_strategy),
             **kwds,
         )
         if resolve_metadata_dependencies:

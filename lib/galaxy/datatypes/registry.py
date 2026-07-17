@@ -139,8 +139,8 @@ class Registry:
 
         if root_dir and config:
             compressed_sniffers: dict[type[Data], list[Data]] = {}
-            enable_crypt4gh_transparent_staging = bool(
-                getattr(self.config, "enable_crypt4gh_transparent_staging", False)
+            enable_crypt4gh_transparent_input_matching = bool(
+                getattr(self.config, "enable_crypt4gh_transparent_input_matching", False)
             )
             crypt4gh_nested_targets: list[dict[str, Any]] = []
             if isinstance(config, (str, os.PathLike)):
@@ -380,7 +380,9 @@ class Registry:
                             elif auto_compressed_type == "crypt4gh":
                                 dynamic_parent = binary.Crypt4GHDynamicCompressedArchive
                                 auto_compressed_ext = CRYPT4GH_DEFAULT_EXT
-                                attributes["enable_crypt4gh_transparent_staging"] = enable_crypt4gh_transparent_staging
+                                attributes["enable_crypt4gh_transparent_input_matching"] = (
+                                    enable_crypt4gh_transparent_input_matching
+                                )
                                 attributes["compressed_format"] = "crypt4gh"
                                 attributes["display_peek"] = binary.Crypt4GHDynamicCompressedArchive.display_peek
                                 attributes["set_meta"] = binary.Crypt4GHDynamicCompressedArchive.set_meta
@@ -491,7 +493,7 @@ class Registry:
                 attributes = {
                     "file_ext": crypt4gh_extension,
                     "compressed_format": "crypt4gh",
-                    "enable_crypt4gh_transparent_staging": enable_crypt4gh_transparent_staging,
+                    "enable_crypt4gh_transparent_input_matching": enable_crypt4gh_transparent_input_matching,
                     "uncompressed_datatype_instance": inner_compressed_datatype_instance,
                     "display_peek": binary.Crypt4GHDynamicCompressedArchive.display_peek,
                     "set_meta": binary.Crypt4GHDynamicCompressedArchive.set_meta,
@@ -773,8 +775,8 @@ class Registry:
         attributes: dict[str, Any] = {
             "file_ext": encrypted_ext,
             "compressed_format": "crypt4gh",
-            "enable_crypt4gh_transparent_staging": bool(
-                getattr(self.config, "enable_crypt4gh_transparent_staging", False)
+            "enable_crypt4gh_transparent_input_matching": bool(
+                getattr(self.config, "enable_crypt4gh_transparent_input_matching", False)
             ),
             "uncompressed_datatype_instance": base_datatype_instance,
             "display_peek": binary.Crypt4GHDynamicCompressedArchive.display_peek,
@@ -1203,13 +1205,14 @@ def upload_warning(template: Optional[Template], auto_compressed_type: Optional[
 
 
 def example_datatype_registry_for_sample(
-    sniff_compressed_dynamic_datatypes_default: bool = True, enable_crypt4gh_transparent_staging: bool = False
+    sniff_compressed_dynamic_datatypes_default: bool = True,
+    enable_crypt4gh_transparent_input_matching: bool = False,
 ):
     galaxy_dir = galaxy.util.galaxy_directory()
     sample_conf = os.path.join(galaxy_dir, "lib", "galaxy", "config", "sample", "datatypes_conf.xml.sample")
     config = Bunch(
         sniff_compressed_dynamic_datatypes_default=sniff_compressed_dynamic_datatypes_default,
-        enable_crypt4gh_transparent_staging=enable_crypt4gh_transparent_staging,
+        enable_crypt4gh_transparent_input_matching=enable_crypt4gh_transparent_input_matching,
     )
     datatypes_registry = Registry(config)
     datatypes_registry.load_datatypes(root_dir=galaxy_dir, config=sample_conf)

@@ -356,7 +356,8 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         super().handle_galaxy_config_kwds(config)
         config["enable_celery_tasks"] = False
         config["metadata_strategy"] = "extended"
-        config["enable_crypt4gh_transparent_staging"] = True
+        config["enable_crypt4gh_transparent_input_matching"] = True
+        config["enable_crypt4gh_remote_execution_staging"] = True
         config["tool_evaluation_strategy"] = "remote"
         if cls._external_reencryption_service_url:
             config["crypt4gh_reencryption_service_url"] = cls._external_reencryption_service_url

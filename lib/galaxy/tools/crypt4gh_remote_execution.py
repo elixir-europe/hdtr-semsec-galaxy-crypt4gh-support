@@ -209,7 +209,10 @@ def _post_many_reencryption_json(
     )
 
 class _Crypt4GHAppConfig(Protocol):
-    enable_crypt4gh_transparent_staging: bool
+    enable_crypt4gh_transparent_input_matching: bool
+    enable_crypt4gh_remote_execution_staging: bool
+    metadata_strategy: str
+    crypt4gh_reencryption_service_url: Optional[str]
 
 
 class Crypt4GHRemoteExecutionError(Exception):
@@ -510,13 +513,13 @@ def should_run_crypt4gh_remote_execution(
     """Decide whether execution-side Crypt4GH setup is allowed for this job.
 
     The helper is intentionally small for the Task 3 contract:
-    - top-level gate: ``enable_crypt4gh_transparent_staging``
+    - top-level gate: ``enable_crypt4gh_remote_execution_staging``
     - execution path only when ``tool_evaluation_strategy == "remote"``
     - only if at least one Crypt4GH input dataset is present
     - setup failures must fail closed
     """
 
-    if not bool(getattr(app_config, "enable_crypt4gh_transparent_staging", False)):
+    if not bool(getattr(app_config, "enable_crypt4gh_remote_execution_staging", False)):
         return False
 
     if destination_params.get("tool_evaluation_strategy") != "remote":
@@ -533,6 +536,116 @@ def should_run_crypt4gh_remote_execution(
     current_time = now or datetime.now(timezone.utc)
     _assert_minimum_ttl(datasets=crypt4gh_inputs, minimum_ttl=effective_minimum_ttl, now=current_time)
     return True
+
+
+def assert_crypt4gh_job_readiness(
+    *,
+    job_io: JobIO,
+    tool: Optional[Any],
+    app_config: _Crypt4GHAppConfig,
+    destination_params: Mapping[str, Any],
+    metadata_strategy: str,
+    reencryption_service_url: Optional[str] = None,
+) -> None:
+    """Fail closed when Crypt4GH transparent-adapted jobs are misconfigured.
+
+    Transparent input matching and remote execution staging are intentionally split:
+    transparent input matching may be enabled alone, but if a job depends on
+    transparent adaptation (tool input does not explicitly accept ``.c4gh``),
+    remote-execution prerequisites must be satisfied.
+    """
+
+    remote_execution_staging_enabled = bool(getattr(app_config, "enable_crypt4gh_remote_execution_staging", False))
+    transparent_input_matching_enabled = bool(
+        getattr(app_config, "enable_crypt4gh_transparent_input_matching", False)
+    )
+
+    if remote_execution_staging_enabled and not transparent_input_matching_enabled:
+        raise Crypt4GHRemoteExecutionError(
+            "Invalid Crypt4GH configuration: enable_crypt4gh_remote_execution_staging requires "
+            "enable_crypt4gh_transparent_input_matching = true"
+        )
+
+    transparent_adapted_inputs = _collect_transparent_adapted_crypt4gh_input_names(job_io=job_io, tool=tool)
+    if not transparent_adapted_inputs:
+        return
+
+    if not remote_execution_staging_enabled:
+        raise Crypt4GHRemoteExecutionError(
+            "Transparent Crypt4GH input adaptation requires enable_crypt4gh_remote_execution_staging = true"
+        )
+
+    if destination_params.get("tool_evaluation_strategy") != "remote":
+        raise Crypt4GHRemoteExecutionError(
+            "Transparent Crypt4GH input adaptation requires tool_evaluation_strategy = remote"
+        )
+
+    if metadata_strategy != "extended":
+        raise Crypt4GHRemoteExecutionError(
+            "Transparent Crypt4GH input adaptation requires metadata_strategy = extended"
+        )
+
+    effective_reencryption_service_url = str(
+        reencryption_service_url
+        or getattr(app_config, "crypt4gh_reencryption_service_url", "")
+        or ""
+    ).strip()
+    if not effective_reencryption_service_url:
+        raise Crypt4GHRemoteExecutionError(
+            "Transparent Crypt4GH input adaptation requires crypt4gh_reencryption_service_url"
+        )
+
+
+def _collect_transparent_adapted_crypt4gh_input_names(*, job_io: JobIO, tool: Optional[Any]) -> list[str]:
+    job = getattr(job_io, "job", None)
+    if not job:
+        return []
+
+    input_associations = [
+        *list(getattr(job, "input_datasets", []) or []),
+        *list(getattr(job, "input_library_datasets", []) or []),
+    ]
+    if not input_associations:
+        return []
+
+    tool_inputs = getattr(tool, "inputs", {}) if tool is not None else {}
+    adapted_names: list[str] = []
+    for input_association in input_associations:
+        dataset = getattr(input_association, "dataset", None)
+        if dataset is None or not _is_crypt4gh_dataset_instance(dataset):
+            continue
+
+        input_name = getattr(input_association, "name", "")
+        if not isinstance(input_name, str) or not input_name:
+            adapted_names.append("<unnamed>")
+            continue
+
+        tool_input = tool_inputs.get(input_name) if isinstance(tool_inputs, Mapping) else None
+        if _tool_input_explicitly_accepts_crypt4gh(tool_input):
+            continue
+
+        adapted_names.append(input_name)
+
+    return adapted_names
+
+
+def _is_crypt4gh_dataset_instance(dataset: Any) -> bool:
+    metadata = getattr(dataset, "metadata", None)
+    if metadata and getattr(metadata, "crypt4gh_header", None):
+        return True
+
+    return str(getattr(dataset, "ext", "") or "").endswith(".c4gh")
+
+
+def _tool_input_explicitly_accepts_crypt4gh(tool_input: Any) -> bool:
+    if tool_input is None:
+        return False
+
+    extensions = getattr(tool_input, "extensions", None)
+    if not isinstance(extensions, Sequence):
+        return False
+
+    return any(isinstance(extension, str) and extension.endswith(".c4gh") for extension in extensions)
 
 
 def _minimum_ttl_for_destination(*, destination_params: Mapping[str, Any], fallback_minimum_ttl: timedelta) -> timedelta:
@@ -771,7 +884,6 @@ def _resolve_output_name_for_tool_lookup(*, output_name: str, tool_outputs: Mapp
 
 def _resolve_base_output_extension(*, dataset: Any, tool_output: Any) -> Optional[str]:
     base_ext = cast(str, getattr(dataset, "ext", "") or "")
-    log.warning(base_ext)
     if not base_ext:
         return None
 

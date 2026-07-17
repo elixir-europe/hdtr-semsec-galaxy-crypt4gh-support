@@ -17,7 +17,8 @@ class TestConfigSchema(integration_util.IntegrationTestCase):
 
         galaxy_mapping = schema_document["mapping"]["galaxy"]["mapping"]
 
-        assert "enable_crypt4gh_transparent_staging" in galaxy_mapping
+        assert "enable_crypt4gh_transparent_input_matching" in galaxy_mapping
+        assert "enable_crypt4gh_remote_execution_staging" in galaxy_mapping
         assert "crypt4gh_reencryption_service_url" in galaxy_mapping
         assert "compute-side recryptor B" in galaxy_mapping["crypt4gh_reencryption_service_url"]["desc"]
         assert "crypt4gh_compute_key_path" not in galaxy_mapping

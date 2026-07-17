@@ -141,21 +141,21 @@ def test_crypt4gh_dynamic_datatypes_registration_and_converters():
 
 
 def test_crypt4gh_runtime_wrapper_registration_for_missing_base_datatype_wrapper():
-    datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
+    datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_input_matching=True)
     assert datatypes_registry.get_datatype_by_extension("fqtoc.c4gh") is None
 
     runtime_datatype = datatypes_registry.get_or_create_crypt4gh_datatype("fqtoc")
     assert runtime_datatype is not None
     assert runtime_datatype.file_ext == "fqtoc.c4gh"
     assert runtime_datatype.uncompressed_datatype_instance.file_ext == "fqtoc"
-    assert runtime_datatype.enable_crypt4gh_transparent_staging is True
+    assert runtime_datatype.enable_crypt4gh_transparent_input_matching is True
 
     # Repeated requests should return the already-registered instance.
     assert datatypes_registry.get_or_create_crypt4gh_datatype("fqtoc") is runtime_datatype
 
 
 def test_datatype_for_extension_creates_runtime_crypt4gh_wrapper_when_base_exists():
-    datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
+    datatypes_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_input_matching=True)
     assert datatypes_registry.get_datatype_by_extension("fqtoc.c4gh") is None
 
     runtime_datatype = model.datatype_for_extension("fqtoc.c4gh", datatypes_registry=datatypes_registry)
@@ -166,12 +166,12 @@ def test_datatype_for_extension_creates_runtime_crypt4gh_wrapper_when_base_exist
 
 
 def test_crypt4gh_matches_any_staging_gate():
-    default_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=False)
+    default_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_input_matching=False)
     fastqsanger = default_registry.get_datatype_by_extension("fastqsanger")
     fastqsanger_crypt4gh = default_registry.get_datatype_by_extension("fastqsanger.c4gh")
     assert not fastqsanger_crypt4gh.matches_any([fastqsanger])
 
-    staging_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_staging=True)
+    staging_registry = example_datatype_registry_for_sample(enable_crypt4gh_transparent_input_matching=True)
     fastqsanger_staging = staging_registry.get_datatype_by_extension("fastqsanger")
     fastqsanger_crypt4gh_staging = staging_registry.get_datatype_by_extension("fastqsanger.c4gh")
     assert fastqsanger_crypt4gh_staging.matches_any([fastqsanger_staging])

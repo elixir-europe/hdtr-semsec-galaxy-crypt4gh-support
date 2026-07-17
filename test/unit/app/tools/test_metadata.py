@@ -163,7 +163,8 @@ class TestMetadata(TestCase, tools_support.UsesTools):
 
     def test_extended_metadata_params_include_crypt4gh_remote_eval_settings(self):
         self.app.config.metadata_strategy = "extended"
-        self.app.config.enable_crypt4gh_transparent_staging = True
+        self.app.config.enable_crypt4gh_transparent_input_matching = True
+        self.app.config.enable_crypt4gh_remote_execution_staging = True
         self.app.config.crypt4gh_reencryption_service_url = "http://127.0.0.1:9999"
 
         source_file_name = os.path.join(galaxy_directory(), "test/functional/tools/for_workflows/cat.xml")
@@ -177,7 +178,8 @@ class TestMetadata(TestCase, tools_support.UsesTools):
         with open(params_path) as f:
             metadata_params = json.load(f)
 
-        assert metadata_params["enable_crypt4gh_transparent_staging"] is True
+        assert metadata_params["enable_crypt4gh_transparent_input_matching"] is True
+        assert metadata_params["enable_crypt4gh_remote_execution_staging"] is True
         assert metadata_params["crypt4gh_reencryption_service_url"] == "http://127.0.0.1:9999"
 
     def _create_output_dataset_collection(self, **kwd):
@@ -248,8 +250,11 @@ class TestMetadata(TestCase, tools_support.UsesTools):
             job=self.job,
             object_store_conf=self.app.object_store.to_dict(),
             max_metadata_value_size=10000,
-            enable_crypt4gh_transparent_staging=bool(
-                getattr(self.app.config, "enable_crypt4gh_transparent_staging", False)
+            enable_crypt4gh_transparent_input_matching=bool(
+                getattr(self.app.config, "enable_crypt4gh_transparent_input_matching", False)
+            ),
+            enable_crypt4gh_remote_execution_staging=bool(
+                getattr(self.app.config, "enable_crypt4gh_remote_execution_staging", False)
             ),
             crypt4gh_reencryption_service_url=getattr(self.app.config, "crypt4gh_reencryption_service_url", None),
         )

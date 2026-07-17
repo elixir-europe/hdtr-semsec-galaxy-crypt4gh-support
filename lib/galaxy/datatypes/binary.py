@@ -396,7 +396,7 @@ class DynamicCompressedArchive(CompressedArchive):
         if (
             self.compressed_format == "crypt4gh"
             and getattr(self, "requires_staging", False)
-            and not getattr(self, "enable_crypt4gh_transparent_staging", False)
+            and not getattr(self, "enable_crypt4gh_transparent_input_matching", False)
         ):
             return CompressedArchive().matches_any(compressed_target_datatypes)
 
@@ -426,7 +426,7 @@ class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
     compressed_format = "crypt4gh"
     compressed = True
     requires_staging = True
-    enable_crypt4gh_transparent_staging = False
+    enable_crypt4gh_transparent_input_matching = False
 
     MetadataElement(
         name="crypt4gh_header",
