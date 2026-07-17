@@ -39,13 +39,14 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 1) Local vs remote evaluation
 
 - **Gap**: Crypt4GH finalization/cleanup orchestration is tied to remote tool-evaluation flow; local destinations can skip equivalent finalization safeguards.
-- **Mitigated?**: **Yes (for transparent-adapted inputs)**. A fail-closed readiness guard now rejects local-strategy jobs when transparent input adaptation would otherwise be required.
+- **Mitigated?**: **Yes (for Crypt4GH inputs in this execution model)**. Readiness now fail-closes for local-strategy jobs whenever Crypt4GH inputs are present, including both transparent-adapted and explicitly `.c4gh`-accepting tool inputs.
 - **Validation added**:
   - readiness-unit coverage for remote prerequisite combinations,
-  - integration coverage asserting local strategy is rejected for transparent-adapted Crypt4GH inputs.
+  - integration coverage asserting local strategy is rejected for transparent-adapted Crypt4GH inputs,
+  - readiness-unit coverage asserting local strategy is rejected for explicit `.c4gh` tool inputs and non-transparent Crypt4GH input handling.
 - **Still needed**:
-  - broader parity testing for non-transparent/edge local paths where appropriate.
-- **Priority / severity**: **Reduced (remaining risk now Medium, mostly parity/coverage-related)**.
+  - broader parity/performance testing for additional destination edge combinations where appropriate.
+- **Priority / severity**: **Reduced (remaining risk now Low-Medium, mostly parity/coverage-related)**.
 
 ## 2) Marker-dir timing / race conditions
 
@@ -177,8 +178,8 @@ Key hardening already present on this branch/work item includes:
     - `pytest -q test/unit/data/model/test_model_discovery_crypt4gh.py -k "about_to_persist_finalization"`
     - `pytest -q test/integration/test_crypt4gh_remote_execution.py -k "discovered_dataset_extra_files_are_encrypted_and_manifested_for_crypt4gh_jobs or transparent_adapted_inputs_fail_closed_when_tool_evaluation_strategy_is_local"`
 
-- [ ] **Task 2 — Local evaluation tests and policy hardening**
-  - Still partially complete (transparent-adapted fail-closed checks in place).
+- [x] **Task 2 — Local evaluation tests and policy hardening**
+  - Completed for this scope: readiness fail-closes local execution for Crypt4GH inputs (transparent-adapted and explicit `.c4gh`-accepting inputs), with unit + integration verification.
 
 - [ ] **Task 3 — Pulsar wrapper parity tests/hardening**
   - Not started in this change set; user requested a plan discussion pause before implementation.

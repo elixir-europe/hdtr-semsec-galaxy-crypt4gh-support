@@ -188,7 +188,7 @@ def test_readiness_rejects_remote_execution_staging_without_input_matching():
         )
 
 
-def test_readiness_allows_input_matching_without_remote_execution_staging():
+def test_readiness_rejects_crypt4gh_inputs_without_remote_execution_staging_even_when_input_accepts_c4gh():
     crypt4gh_dataset = _Dataset(
         _DatasetMetadata(crypt4gh_header="header", expiration="2026-06-02T12:00:00+00:00"),
         ext="fastqsanger.c4gh",
@@ -196,16 +196,17 @@ def test_readiness_allows_input_matching_without_remote_execution_staging():
     input_association = _InputDatasetAssociation(name="input_data", dataset=crypt4gh_dataset)
     tool = _ReadinessTool(inputs={"input_data": _ReadinessToolInput(["fastqsanger.c4gh"])})
 
-    assert_crypt4gh_job_readiness(
-        job_io=_ReadinessJobIO([input_association]),
-        tool=tool,
-        app_config=_Config(
-            enable_crypt4gh_remote_execution_staging=False,
-            enable_crypt4gh_transparent_input_matching=True,
-        ),
-        destination_params={"tool_evaluation_strategy": "local"},
-        metadata_strategy="directory",
-    )
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="requires enable_crypt4gh_remote_execution_staging"):
+        assert_crypt4gh_job_readiness(
+            job_io=_ReadinessJobIO([input_association]),
+            tool=tool,
+            app_config=_Config(
+                enable_crypt4gh_remote_execution_staging=False,
+                enable_crypt4gh_transparent_input_matching=True,
+            ),
+            destination_params={"tool_evaluation_strategy": "local"},
+            metadata_strategy="directory",
+        )
 
 
 def test_readiness_rejects_transparent_adapted_inputs_without_remote_staging_gate():
@@ -305,7 +306,7 @@ def test_readiness_allows_transparent_adapted_inputs_when_remote_prerequisites_a
     )
 
 
-def test_readiness_allows_explicit_crypt4gh_tool_inputs_without_remote_path():
+def test_readiness_rejects_explicit_crypt4gh_tool_inputs_without_remote_path():
     crypt4gh_dataset = _Dataset(
         _DatasetMetadata(crypt4gh_header="header", expiration="2026-06-02T12:00:00+00:00"),
         ext="fastqsanger.c4gh",
@@ -313,12 +314,30 @@ def test_readiness_allows_explicit_crypt4gh_tool_inputs_without_remote_path():
     input_association = _InputDatasetAssociation(name="input_data", dataset=crypt4gh_dataset)
     tool = _ReadinessTool(inputs={"input_data": _ReadinessToolInput(["fastqsanger.c4gh"])})
 
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="requires enable_crypt4gh_remote_execution_staging"):
+        assert_crypt4gh_job_readiness(
+            job_io=_ReadinessJobIO([input_association]),
+            tool=tool,
+            app_config=_Config(
+                enable_crypt4gh_remote_execution_staging=False,
+                enable_crypt4gh_transparent_input_matching=True,
+            ),
+            destination_params={"tool_evaluation_strategy": "local"},
+            metadata_strategy="directory",
+        )
+
+
+def test_readiness_allows_non_crypt4gh_inputs_without_remote_path():
+    plain_dataset = _Dataset(_DatasetMetadata(crypt4gh_header=None, expiration=None), ext="fastqsanger")
+    input_association = _InputDatasetAssociation(name="input_data", dataset=plain_dataset)
+    tool = _ReadinessTool(inputs={"input_data": _ReadinessToolInput(["fastqsanger"])})
+
     assert_crypt4gh_job_readiness(
         job_io=_ReadinessJobIO([input_association]),
         tool=tool,
         app_config=_Config(
             enable_crypt4gh_remote_execution_staging=False,
-            enable_crypt4gh_transparent_input_matching=True,
+            enable_crypt4gh_transparent_input_matching=False,
         ),
         destination_params={"tool_evaluation_strategy": "local"},
         metadata_strategy="directory",

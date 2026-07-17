@@ -579,25 +579,27 @@ def assert_crypt4gh_job_readiness(
             + _missing_remote_settings_summary()
         )
 
-    transparent_adapted_inputs = _collect_transparent_adapted_crypt4gh_input_names(job_io=job_io, tool=tool)
-    if not transparent_adapted_inputs:
+    crypt4gh_input_names = _collect_crypt4gh_input_names(job_io=job_io)
+    if not crypt4gh_input_names:
         return
+
+    transparent_adapted_inputs = _collect_transparent_adapted_crypt4gh_input_names(job_io=job_io, tool=tool)
 
     if not remote_execution_staging_enabled:
         raise Crypt4GHRemoteExecutionError(
-            "Transparent Crypt4GH input adaptation requires enable_crypt4gh_remote_execution_staging = true"
+            "Crypt4GH input handling requires enable_crypt4gh_remote_execution_staging = true"
             + _missing_remote_settings_summary()
         )
 
     if destination_params.get("tool_evaluation_strategy") != "remote":
         raise Crypt4GHRemoteExecutionError(
-            "Transparent Crypt4GH input adaptation requires tool_evaluation_strategy = remote"
+            "Crypt4GH input handling requires tool_evaluation_strategy = remote"
             + _missing_remote_settings_summary()
         )
 
     if metadata_strategy != "extended":
         raise Crypt4GHRemoteExecutionError(
-            "Transparent Crypt4GH input adaptation requires metadata_strategy = extended"
+            "Crypt4GH input handling requires metadata_strategy = extended"
             + _missing_remote_settings_summary()
         )
 
@@ -608,9 +610,37 @@ def assert_crypt4gh_job_readiness(
     ).strip()
     if not effective_reencryption_service_url:
         raise Crypt4GHRemoteExecutionError(
-            "Transparent Crypt4GH input adaptation requires crypt4gh_reencryption_service_url"
+            "Crypt4GH input handling requires crypt4gh_reencryption_service_url"
             + _missing_remote_settings_summary()
         )
+
+    del transparent_adapted_inputs
+
+
+def _collect_crypt4gh_input_names(*, job_io: JobIO) -> list[str]:
+    job = getattr(job_io, "job", None)
+    if not job:
+        return []
+
+    input_associations = [
+        *list(getattr(job, "input_datasets", []) or []),
+        *list(getattr(job, "input_library_datasets", []) or []),
+    ]
+    if not input_associations:
+        return []
+
+    crypt4gh_input_names: list[str] = []
+    for input_association in input_associations:
+        dataset = getattr(input_association, "dataset", None)
+        if dataset is None or not _is_crypt4gh_dataset_instance(dataset):
+            continue
+
+        input_name = getattr(input_association, "name", "")
+        if not isinstance(input_name, str) or not input_name:
+            input_name = "<unnamed>"
+        crypt4gh_input_names.append(input_name)
+
+    return crypt4gh_input_names
 
 
 def _collect_transparent_adapted_crypt4gh_input_names(*, job_io: JobIO, tool: Optional[Any]) -> list[str]:
