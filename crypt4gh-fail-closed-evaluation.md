@@ -84,12 +84,17 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 5) Symlink / race / permission failures in best-effort purge
 
 - **Gap**: Cleanup may fail due to permission errors, symlink behavior, concurrent file mutation, mount behavior.
-- **Mitigated?**: **Partially**. Cleanup markers and exception logging exist; best-effort cleanup attempts run.
+- **Mitigated?**: **Partially (improved)**.
+- **Mitigation implemented**:
+  - Best-effort postrun purge now validates each purge candidate against `_ALLOWED_ROOTS` before delete operations in the embedded finalize script.
+  - Best-effort postrun purge now treats symlink paths as unlink targets (using `lexists` + `islink` + `unlink`) rather than recursing through symlinked directories.
+  - Added regression coverage for both behaviors:
+    - `test_finalize_command_best_effort_purge_skips_paths_outside_allowed_roots_on_import_failure`
+    - `test_finalize_command_best_effort_purge_unlinks_extra_files_directory_symlink_on_import_failure`
 - **Still needed**:
-  - hardened deletion strategy with safe path validation,
-  - clearer operator diagnostics + retry/backoff where safe,
-  - tests for permission-denied and symlink edge cases.
-- **Priority / severity**: **Medium-High**.
+  - permission-denied and concurrent-mutation stress coverage,
+  - clearer operator diagnostics for partial purge outcomes under hostile runtime conditions.
+- **Priority / severity**: **Reduced (Medium; permission/race follow-up remains)**.
 
 ## 6) Output written outside job working directory
 
@@ -295,3 +300,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: allowed-root checks existed, but traversal-focused regressions needed to prove parent-segment and symlink escape attempts fail closed across both primary output and extra-files payload paths.
 - **Security impact**: positive. Finalization now rejects out-of-root traversal payloads earlier and enforces per-extra-file allowed-root containment before encryption/rewrite.
 - **Follow-up**: add race/permission stress tests and diagnostics assertions for best-effort purge edge conditions.
+
+### 2026-07-18 — Gap #5 harden best-effort postrun purge path handling
+
+- **Decision**: harden embedded postrun purge behavior to fail safer under import/finalize errors by validating purge candidates against allowed roots and unlinking symlink paths directly.
+- **Why**: fallback purge previously deleted without explicit root validation in the embedded script and relied on `exists`/`isdir` handling that could leave symlink directory entries behind.
+- **Security impact**: positive. Best-effort purge no longer attempts out-of-scope deletions and removes symlink path entries without traversing target directories.
+- **Follow-up**: add permission-denied and race-condition stress coverage with stronger diagnostics assertions.
