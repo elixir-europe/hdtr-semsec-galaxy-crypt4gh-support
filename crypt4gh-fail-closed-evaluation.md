@@ -80,7 +80,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 4) Pulsar / `for_pulsar` branch divergence
 
 - **Gap**: Cleanup/finalization wrapping may not execute identically across Pulsar-oriented command assembly paths.
-- **Mitigated?**: **Partially**. Core wrapper exists, but parity across all Pulsar branches is not fully verified.
+- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, and preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, but parity across all Pulsar branches is not fully verified.
 - **Still needed**:
   - targeted Pulsar branch tests asserting wrapper + postrun + cleanup execution ordering,
   - verification that failure semantics match non-Pulsar remote path.
@@ -109,7 +109,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 6) Output written outside job working directory
 
 - **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
-- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, and JobWrapper now fail-closes before verifier execution when tracked Crypt4GH payload paths resolve outside job-scope roots.
+- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, JobWrapper now fail-closes before verifier execution when tracked Crypt4GH payload paths resolve outside job-scope roots, and pre-success verifier now fails closed on residual plaintext staging artifacts under `_crypt/outputs` even when untracked by dataset associations.
 - **Mitigation implemented**:
   - Added JobWrapper pre-success scope gate (`_assert_crypt4gh_output_payloads_within_job_scope_roots`) to enforce that tracked Crypt4GH output payload paths stay within job-scope roots (working directory and its parent scope used by current marker/layout conventions).
   - Gate runs before `verify_crypt4gh_pre_success_output_evidence(...)` and raises fail-closed diagnostics when payload path provenance is out-of-scope.
@@ -444,3 +444,31 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: allowing exact-threshold TTL values leaves no scheduling or transport slack and can admit jobs that cross expiry boundary during execution startup.
 - **Security impact**: positive. Jobs now fail before remote execution when TTL sits exactly at the configured floor, reducing boundary race acceptance for both default and destination-derived minima.
 - **Follow-up**: expand integration coverage for destination-specific and Pulsar paths to validate consistent boundary enforcement outside unit-level gating.
+
+### 2026-07-18 — Gap #4 enforce Pulsar wrapper command separation in remote command assembly
+
+- **Decision**: ensure Pulsar `remote_command_line` preamble insertion uses explicit shell-command separation (`;`) before subsequent command-builder steps.
+- **Why**: without an explicit separator, the Pulsar wrapper chain (`... && bash ../tool_script.sh`) can concatenate directly into the next command segment (for example `cd working`), risking malformed shell execution and divergence from non-Pulsar sequencing.
+- **Security impact**: positive. Tightens execution determinism for Pulsar command assembly and reduces risk of wrapper/finalization sequencing drift caused by shell-token concatenation.
+- **Follow-up**: add additional Pulsar parity tests that assert wrapper + postrun + cleanup ordering and failure-propagation semantics against non-Pulsar paths.
+
+### 2026-07-18 — Gap #4 enforce Pulsar wrapper success-gating parity for follow-up commands
+
+- **Decision**: require Pulsar remote wrapper insertion to keep follow-up command-builder steps under `&&` success gating, matching non-Pulsar failure-propagation semantics.
+- **Why**: semicolon-separated follow-up execution can continue job command segments even when remote-eval wrapper/tool-script chain fails, creating divergence in failure behavior and potentially bypassing intended stop-on-failure flow.
+- **Security impact**: positive. Improves fail-closed consistency by preventing follow-up command execution after Pulsar wrapper failure in remote command assembly.
+- **Follow-up**: expand Pulsar parity coverage to include explicit postrun/cleanup-failure propagation assertions and ordering checks against non-Pulsar wrappers.
+
+### 2026-07-18 — Gap #4 group Pulsar downstream command chain under a single success gate
+
+- **Decision**: wrap Pulsar follow-up command-builder output in a grouped segment (`&& ( ... )`) after the remote-eval/tool-script wrapper chain.
+- **Why**: chaining only the first follow-up token (for example `cd working`) under `&&` still allows later command tail segments to execute with semicolon continuation after mid-chain failures; grouped gating aligns Pulsar behavior with non-Pulsar command-chain failure propagation.
+- **Security impact**: positive. Reduces divergence risk where partial follow-up execution could continue after wrapper-chain failures, strengthening fail-closed sequencing semantics in Pulsar command assembly.
+- **Follow-up**: add targeted parity tests for representative failure points inside grouped follow-up chains (working-dir transition, tool invocation, stdout/stderr capture) and compare against non-Pulsar behavior.
+
+### 2026-07-18 — Gap #6 fail pre-success on residual plaintext staging artifacts outside tracked dataset associations
+
+- **Decision**: extend pre-success evidence verification to scan `_crypt/outputs` for leftover `plaintext` artifacts and fail closed when any remain.
+- **Why**: tracked dataset/marker evidence can be green while stale or untracked plaintext staging files persist, leaving residual plaintext risk beyond association-scoped verification.
+- **Security impact**: positive. Jobs now fail before success when plaintext staging residues remain under Crypt4GH output staging roots, reducing acceptance of partially cleaned plaintext artifacts.
+- **Follow-up**: add integration-level coverage for destination-specific staging layouts and mixed tracked/untracked output topologies.

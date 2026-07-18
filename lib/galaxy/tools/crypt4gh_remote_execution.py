@@ -1753,6 +1753,11 @@ def verify_crypt4gh_pre_success_output_evidence(
             diagnostics=diagnostics,
         )
 
+    _verify_no_residual_plaintext_staging_artifacts(
+        working_directory=working_directory,
+        diagnostics=diagnostics,
+    )
+
     if discovered_designations:
         _verify_discovered_mapping_evidence(
             marker_dirs=marker_dirs,
@@ -1998,6 +2003,21 @@ def _verify_extra_files_manifest_evidence(
         diagnostics.append(f"extra_files manifest invalid for dataset_id={dataset_id}")
     elif saw_unreadable_manifest:
         diagnostics.append(f"extra_files manifest unreadable for dataset_id={dataset_id}")
+
+
+def _verify_no_residual_plaintext_staging_artifacts(*, working_directory: str, diagnostics: list[str]) -> None:
+    plaintext_root = Path(working_directory) / "_crypt" / "outputs"
+    if not plaintext_root.exists() or not plaintext_root.is_dir():
+        return
+
+    for root, _dirs, files in os.walk(plaintext_root):
+        root_path = Path(root)
+        for file_name in files:
+            if file_name != "plaintext":
+                continue
+
+            leaked_path = root_path / file_name
+            diagnostics.append(f"plaintext staging artifact remained at path={leaked_path}")
 
 
 def _verify_extra_files_payload_header_evidence(
