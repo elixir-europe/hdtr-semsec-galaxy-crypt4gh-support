@@ -123,10 +123,10 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 8) Compute-key TTL / expiration window
 
 - **Gap**: Long-running jobs can approach key expiry between early TTL checks and finalization time.
-- **Mitigated?**: **Partially**. Minimum TTL checks and finalization-time expiry checks are in place.
+- **Mitigated?**: **Partially (improved)**. Minimum TTL checks and finalization-time expiry checks are in place; destination walltime-derived TTL now preserves the default floor instead of weakening it for short walltime declarations.
 - **Still needed**:
   - stronger end-to-end TTL policy for long walltime jobs,
-  - explicit tests for near-expiry and mid-run expiry scenarios.
+  - additional integration tests for near-expiry and mid-run expiry scenarios across destination classes.
 - **Priority / severity**: **Medium-High**.
 
 ## 9) Discovery callers not consistently using `require_crypt4gh_extension`
@@ -350,3 +350,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: marker/mapping evidence alone can be stale or inconsistent with actual payload bytes; tracked outputs should fail closed if bytes remain plaintext at success boundary.
 - **Security impact**: positive. Jobs now fail before success when tracked output payloads are not Crypt4GH-encrypted, including discovered outputs with valid mapping but plaintext bytes.
 - **Follow-up**: expand integration coverage for out-of-tree plaintext artifact detection and non-tracked path policy enforcement.
+
+### 2026-07-18 — Gap #8 preserve default minimum TTL floor under short destination walltime
+
+- **Decision**: compute destination-derived minimum TTL as `max(default_minimum_ttl, walltime + safety_buffer)` rather than replacing the default with walltime-derived values.
+- **Why**: short declared walltime values (for example 10–15 minutes) could otherwise reduce a 24-hour default TTL floor and permit near-expiry keys that contradict conservative fail-closed policy.
+- **Security impact**: positive. TTL gate remains conservative under short walltime declarations while still scaling upward for long walltime jobs.
+- **Follow-up**: add integration coverage around destination-specific walltime propagation and end-to-end expiry windows.

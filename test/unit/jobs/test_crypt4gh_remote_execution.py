@@ -543,6 +543,23 @@ def test_should_run_uses_destination_walltime_plus_one_hour_buffer():
         )
 
 
+def test_should_run_preserves_default_ttl_floor_when_walltime_is_short():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T03:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_remote_execution_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote", "walltime": "00:15:00"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
 def test_should_run_falls_back_to_24h_when_walltime_is_unparseable():
     dataset = _Dataset(
         _DatasetMetadata(
@@ -575,6 +592,39 @@ def test_build_environment_uses_job_destination_walltime_before_any_recrypt_call
         nonlocal recrypt_attempted
         recrypt_attempted = True
         raise AssertionError("should not call recrypt path when derived minimum TTL gate fails")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._prepare_plaintext_input_for_dataset",
+        _sentinel_prepare_plaintext_input_for_dataset,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        build_crypt4gh_remote_compute_environment(
+            job_io=_JobIO([dataset]),
+            job=_BuildJob(destination_params={"walltime": "00:10:00"}),
+            working_directory="/tmp",
+            reencryption_service_url="http://example.invalid",
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+    assert recrypt_attempted is False
+
+
+def test_build_environment_preserves_default_ttl_floor_when_walltime_is_short(monkeypatch):
+    dataset = _BuildDataset(
+        dataset_id=1,
+        metadata=_DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T03:00:00+00:00",
+        ),
+    )
+
+    recrypt_attempted = False
+
+    def _sentinel_prepare_plaintext_input_for_dataset(**_kwargs):
+        nonlocal recrypt_attempted
+        recrypt_attempted = True
+        raise AssertionError("should not call recrypt path when default minimum TTL floor fails")
 
     monkeypatch.setattr(
         "galaxy.tools.crypt4gh_remote_execution._prepare_plaintext_input_for_dataset",

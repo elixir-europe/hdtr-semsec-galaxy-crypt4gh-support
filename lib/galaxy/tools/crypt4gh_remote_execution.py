@@ -723,7 +723,8 @@ def _minimum_ttl_for_destination(*, destination_params: Mapping[str, Any], fallb
     walltime_delta = _parse_destination_walltime(walltime_value)
     if walltime_delta is None:
         return fallback_minimum_ttl
-    return walltime_delta + _DESTINATION_WALLTIME_BUFFER
+    derived_minimum_ttl = walltime_delta + _DESTINATION_WALLTIME_BUFFER
+    return max(fallback_minimum_ttl, derived_minimum_ttl)
 
 
 def _parse_destination_walltime(walltime_value: Any) -> Optional[timedelta]:
