@@ -113,8 +113,8 @@ class TestCommandFactory(TestCase):
             }
         )
 
-        assert "&& bash ../tool_script.sh cd working;" not in command
-        assert "&& bash ../tool_script.sh && ( cd working;" in command
+        assert "&& /bin/sh ../tool_script.sh cd working;" not in command
+        assert "&& /bin/sh ../tool_script.sh && ( cd working;" in command
 
     def test_remote_tool_eval_for_pulsar_gates_followup_commands_on_wrapper_success(self):
         self.include_work_dir_outputs = False
@@ -127,8 +127,23 @@ class TestCommandFactory(TestCase):
             }
         )
 
-        assert "&& bash ../tool_script.sh; cd working;" not in command
-        assert "&& bash ../tool_script.sh && ( cd working;" in command
+        assert "&& /bin/sh ../tool_script.sh; cd working;" not in command
+        assert "&& /bin/sh ../tool_script.sh && ( cd working;" in command
+
+    def test_remote_tool_eval_for_pulsar_uses_configured_shell_for_tool_script_execution(self):
+        self.include_work_dir_outputs = False
+        self.job_wrapper.remote_command_line = True
+        self.job_wrapper.shell = "/bin/dash"
+
+        command = self.__command(
+            remote_command_params={
+                "pulsar_version": "1.0.0",
+                "script_directory": "/pulsar/scripts",
+            }
+        )
+
+        assert "&& bash ../tool_script.sh" not in command
+        assert "&& /bin/dash ../tool_script.sh && ( cd working;" in command
 
     def test_remote_tool_eval_for_pulsar_does_not_use_single_command_success_gating_for_followup_chain(self):
         self.include_work_dir_outputs = False
