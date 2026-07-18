@@ -60,11 +60,17 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 3) Purge path safety (containment)
 
 - **Gap**: Purge/delete paths require continued hardening against edge-case filesystem behavior.
-- **Mitigated?**: **Largely**. Canonical allowed-root checks now guard finalize and purge path operations for declared and discovered hooks in current flow.
-- **Still needed**:
-  - explicit symlink/traversal race stress tests,
-  - permission-denied behavior hardening and diagnostics polish.
-- **Priority / severity**: **Medium**.
+- **Mitigated?**: **Yes (for current declared/discovered finalize + purge containment paths)**.
+- **Mitigation implemented**:
+  - Added traversal-focused negative coverage that proves declared-finalization targets with `..` parent-segment traversal are rejected before encryption side effects:
+    - `test_finalize_declared_outputs_rejects_traversal_output_target_via_parent_segments`
+  - Added symlink traversal negative coverage for extra-files finalization and hardened runtime containment checks:
+    - `test_finalize_declared_outputs_rejects_extra_files_symlink_traversal`
+    - `_finalize_extra_files_payloads(...)` now explicitly enforces `_assert_path_within_allowed_roots(...)` per resolved extra-files payload before encryption/rewrite.
+  - Existing allowed-root checks continue to guard output/plaintext/marker/manifest paths in finalize and purge flows.
+- **Residual risk / follow-up**:
+  - add permission-denied/race-condition stress coverage to improve diagnostics confidence under hostile filesystem timing.
+- **Priority / severity**: **Reduced (Low-Medium; race/permissions follow-up)**.
 
 ## 4) Pulsar / `for_pulsar` branch divergence
 
@@ -282,3 +288,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: metadata-setting entry points could otherwise call `_resolve_discovered_crypt4gh_extension(...)` without context-enforced requirement semantics, allowing extension resolution behavior to drift from active Crypt4GH finalization context.
 - **Security impact**: positive. Discovery metadata and collection paths now consistently honor Crypt4GH-context extension enforcement, reducing risk of unencrypted extension assignment drift.
 - **Follow-up**: keep caller-audit regression coverage for new discovery/metadata entry points that invoke extension resolution.
+
+### 2026-07-18 — Gap #3 traversal-focused containment hardening for finalize/purge flows
+
+- **Decision**: harden and verify containment by adding explicit traversal/symlink negative coverage in declared output finalization, including extra-files payload handling.
+- **Why**: allowed-root checks existed, but traversal-focused regressions needed to prove parent-segment and symlink escape attempts fail closed across both primary output and extra-files payload paths.
+- **Security impact**: positive. Finalization now rejects out-of-root traversal payloads earlier and enforces per-extra-file allowed-root containment before encryption/rewrite.
+- **Follow-up**: add race/permission stress tests and diagnostics assertions for best-effort purge edge conditions.

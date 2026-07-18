@@ -1719,6 +1719,72 @@ def test_finalize_declared_outputs_fail_closed_when_extra_files_manifest_missing
         )
 
 
+def test_finalize_declared_outputs_rejects_extra_files_symlink_traversal(tmp_path, monkeypatch):
+    working_root = tmp_path / "working"
+
+    output_path = working_root / "dataset_24.dat"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    outside_secret = tmp_path / "outside" / "secret.txt"
+    outside_secret.parent.mkdir(parents=True, exist_ok=True)
+    outside_secret.write_text("outside-secret\n")
+
+    extra_files_root = working_root / "dataset_24_files"
+    extra_files_root.mkdir(parents=True, exist_ok=True)
+    (extra_files_root / "linked.txt").symlink_to(outside_secret)
+
+    marker_dir = working_root / "_c4gh_stage" / "outputs"
+    manifest_path = marker_dir / "ds_24.extra_files_manifest.json"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        payload = Path(plaintext_path).read_bytes()
+        Path(compute_encrypted_path).write_bytes(b"crypt4gh" + payload)
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="outside allowed roots"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(working_root / "_crypt" / "outputs" / "ds_24" / "plaintext"),
+                    "encrypted_marker_path": str(marker_dir / "ds_24.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "extra_files_output_path": str(extra_files_root),
+                    "extra_files_manifest_path": str(manifest_path),
+                    "allowed_root_paths": [str(working_root)],
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert outside_secret.exists()
+    assert not output_path.exists()
+    assert not extra_files_root.exists()
+
+
 def test_pre_success_verifier_fails_for_missing_payload_marker(tmp_path):
     marker_dir = tmp_path / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)
@@ -2222,6 +2288,49 @@ def test_finalize_declared_outputs_rejects_targets_outside_allowed_roots(tmp_pat
         )
 
     assert unsafe_output_path.exists()
+
+
+def test_finalize_declared_outputs_rejects_traversal_output_target_via_parent_segments(tmp_path, monkeypatch):
+    allowed_root = tmp_path / "job_work"
+    allowed_root.mkdir(parents=True, exist_ok=True)
+
+    outside_root = tmp_path / "outside"
+    outside_root.mkdir(parents=True, exist_ok=True)
+    outside_output_path = outside_root / "leaked_output.txt"
+    outside_output_path.write_text("plain\n")
+
+    (allowed_root / "working").mkdir(parents=True, exist_ok=True)
+
+    traversal_output_path = allowed_root / "working" / ".." / ".." / "outside" / "leaked_output.txt"
+
+    def _encrypt_should_not_run(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise AssertionError("encryption should not run for traversal output targets")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _encrypt_should_not_run,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="outside allowed roots"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(traversal_output_path),
+                    "plaintext_path": str(allowed_root / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+                    "encrypted_marker_path": str(allowed_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "allowed_root_paths": [str(allowed_root)],
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert outside_output_path.exists()
 
 
 def test_finalize_about_to_persist_payload_writes_discovered_designation_map(tmp_path, monkeypatch):

@@ -1544,6 +1544,12 @@ def _finalize_extra_files_payloads(
             )
             extra_file_target["encrypted_marker_path"] = ""
             extra_file_target.pop("dataset_output_path", None)
+            allowed_roots = _resolve_allowed_root_paths(extra_file_target)
+            _assert_path_within_allowed_roots(
+                source_path,
+                allowed_root_paths=allowed_roots,
+                context="finalize extra_files payload",
+            )
 
             _finalize_output_target(
                 concrete_target=extra_file_target,
