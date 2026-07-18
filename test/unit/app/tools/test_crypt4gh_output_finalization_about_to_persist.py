@@ -61,6 +61,7 @@ def test_finalize_about_to_persist_payload_encrypts_extra_files_and_writes_manif
         discovered_marker_map_path=str(map_path),
         extra_files_output_path=str(extra_files_root),
         extra_files_manifest_path=str(manifest_path),
+        allowed_root_paths=[str(tmp_path.resolve())],
     )
 
     with output_path.open("rb") as output_stream:
@@ -143,6 +144,7 @@ def test_finalize_about_to_persist_payload_fail_closed_when_extra_files_manifest
             discovered_marker_map_path=str(map_path),
             extra_files_output_path=str(extra_files_root),
             extra_files_manifest_path=str(manifest_path),
+            allowed_root_paths=[str(tmp_path.resolve())],
         )
 
     assert not output_path.exists()
@@ -190,4 +192,45 @@ def test_finalize_about_to_persist_payload_rejects_paths_outside_allowed_roots(t
             discovered_marker_map_path=str(map_path),
             extra_files_manifest_path=str(manifest_path),
             allowed_root_paths=[str((tmp_path / "discover").resolve())],
+        )
+
+
+def test_finalize_about_to_persist_payload_requires_explicit_allowed_root_provenance(tmp_path, monkeypatch):
+    output_path = tmp_path / "discover" / "sample1.tsv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("sample\n")
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        payload = Path(plaintext_path).read_bytes()
+        Path(compute_encrypted_path).write_bytes(payload)
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="requires explicit allowed_root_paths provenance"):
+        finalize_about_to_persist_crypt4gh_payload(
+            output_path=str(output_path),
+            plaintext_path=str(tmp_path / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+            encrypted_ext="tabular.c4gh",
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
         )

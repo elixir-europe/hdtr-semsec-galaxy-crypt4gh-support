@@ -2266,6 +2266,7 @@ def test_finalize_about_to_persist_payload_writes_discovered_designation_map(tmp
         encrypted_marker_path=str(marker_dir / "ds_1.encrypted"),
         designation="sample1",
         discovered_marker_map_path=str(map_path),
+        allowed_root_paths=[str(tmp_path.resolve())],
     )
 
     assert map_path.exists()

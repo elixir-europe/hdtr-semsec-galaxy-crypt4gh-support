@@ -1158,6 +1158,12 @@ def finalize_about_to_persist_crypt4gh_payload(
     allowed_root_paths: Sequence[str] = (),
     clear_compute_keypair: bool = True,
 ) -> None:
+    resolved_allowed_root_paths = [str(path) for path in allowed_root_paths if str(path)]
+    if not resolved_allowed_root_paths:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH finalize_about_to_persist requires explicit allowed_root_paths provenance"
+        )
+
     concrete_target: dict[str, Any] = {
         "output_path": output_path,
         "plaintext_path": plaintext_path,
@@ -1175,8 +1181,7 @@ def finalize_about_to_persist_crypt4gh_payload(
         concrete_target["extra_files_output_path"] = extra_files_output_path
     if extra_files_manifest_path:
         concrete_target["extra_files_manifest_path"] = extra_files_manifest_path
-    if allowed_root_paths:
-        concrete_target["allowed_root_paths"] = [str(path) for path in allowed_root_paths if str(path)]
+    concrete_target["allowed_root_paths"] = resolved_allowed_root_paths
 
     allowed_roots = _resolve_allowed_root_paths(concrete_target)
     _assert_path_within_allowed_roots(

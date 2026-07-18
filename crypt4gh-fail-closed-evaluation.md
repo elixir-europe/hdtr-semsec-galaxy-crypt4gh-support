@@ -97,11 +97,16 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 7) Path construction validation for finalize-about-to-persist
 
 - **Gap**: `finalize_about_to_persist_crypt4gh_payload` accepts string paths from caller context; limited defensive path validation.
-- **Mitigated?**: **Partially (improved)**. Allowed-root checks are enforced and discovered hooks no longer pass `dataset_output_path` into finalize calls.
-- **Still needed**:
-  - validate path provenance and allowed roots,
-  - refuse unsafe/ambiguous targets before finalization/purge actions.
-- **Priority / severity**: **Medium-High**.
+- **Mitigated?**: **Yes (for current finalize-about-to-persist call paths)**.
+- **Mitigation implemented**:
+  - `finalize_about_to_persist_crypt4gh_payload(...)` now requires explicit non-empty `allowed_root_paths`; it fail-closes with `Crypt4GHRemoteExecutionError` when caller provenance is missing.
+  - Existing path containment assertions continue to enforce that output, marker, plaintext, and optional auxiliary paths remain within declared roots before finalization and purge actions.
+  - Added regression coverage for missing-provenance refusal and updated direct finalize callsites/tests to pass explicit roots:
+    - `test_finalize_about_to_persist_payload_requires_explicit_allowed_root_provenance`
+    - Updated direct finalize tests in `test_crypt4gh_output_finalization_about_to_persist.py` and `test_crypt4gh_remote_execution.py` to provide explicit `allowed_root_paths`.
+- **Residual risk / follow-up**:
+  - keep expanding caller-audit coverage so any newly introduced finalize-about-to-persist entry points must also provide explicit provenance roots.
+- **Priority / severity**: **Reduced (Low-Medium; caller-audit follow-up)**.
 
 ## 8) Compute-key TTL / expiration window
 
@@ -256,3 +261,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: modify-input/metadata-source outputs can inherit stale recrypt header metadata from inputs. Clearing compute keypair fields without resetting the metadata header leaves inconsistent Crypt4GH metadata (`metadata_header_sha256 != dataset_header_sha256`) and stale header provenance.
 - **Security impact**: positive. Returned outputs now clear compute keypair metadata and re-anchor metadata-header hash state to the actual dataset header unless an explicit replacement header is provided by the finalization path.
 - **Follow-up**: expand regression coverage across more modify-input archetypes and non-primary output paths to ensure reset behavior remains consistent.
+
+### 2026-07-18 — Gap #7 require explicit allowed-root provenance for finalize-about-to-persist
+
+- **Decision**: make `allowed_root_paths` mandatory for `finalize_about_to_persist_crypt4gh_payload(...)` and fail closed when absent.
+- **Why**: deriving fallback roots from target-path strings alone is weaker provenance and can obscure caller intent. Requiring explicit roots forces the caller to bind finalization to a known safe scope.
+- **Security impact**: positive. Finalization now refuses ambiguous/no-provenance invocations before any encrypt/rewrite/purge side effects begin.
+- **Follow-up**: maintain caller-audit tests for any new finalize-about-to-persist entry points to prevent regressions to implicit root derivation.
