@@ -1292,8 +1292,12 @@ def _purge_output_targets_after_finalization_failure(
                     allowed_root_paths=allowed_roots,
                     context="purge plaintext extra_files candidate",
                 )
-                if extra_files_output_path.exists() and extra_files_output_path.is_dir():
+                if extra_files_output_path.is_symlink():
+                    extra_files_output_path.unlink()
+                elif extra_files_output_path.exists() and extra_files_output_path.is_dir():
                     shutil.rmtree(extra_files_output_path)
+                elif extra_files_output_path.exists():
+                    extra_files_output_path.unlink()
             except Exception:
                 log.exception(
                     "Failed to remove plaintext extra_files candidate %s after Crypt4GH finalization failure",

@@ -147,11 +147,11 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics and `outputs_to_working_directory` readiness requirement.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, and explicit symlink-cleanup failure-path coverage for declared-output purge.
 - **Still needed**:
-  - add explicit negative tests for path traversal/containment,
+  - add broader permission-denied and concurrent-mutation cleanup stress tests,
   - add Pulsar branch parity tests,
-  - add symlink/permission/race cleanup tests.
+  - add additional TTL boundary and race-window scenarios.
 - **Priority / severity**: **High**.
 
 ## 11) Dynamic datatype registration warning for non-preregistered `*.c4gh` variants
@@ -307,3 +307,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: fallback purge previously deleted without explicit root validation in the embedded script and relied on `exists`/`isdir` handling that could leave symlink directory entries behind.
 - **Security impact**: positive. Best-effort purge no longer attempts out-of-scope deletions and removes symlink path entries without traversing target directories.
 - **Follow-up**: add permission-denied and race-condition stress coverage with stronger diagnostics assertions.
+
+### 2026-07-18 — Gap #10 prioritize symlink cleanup failure-path coverage in declared-output purge
+
+- **Decision**: add a high-risk edge-case regression for declared-output purge when `extra_files_output_path` is a directory symlink and finalization fails before payload rewrite.
+- **Why**: current purge behavior used `shutil.rmtree(...)` for extra-files directories, which raises `OSError` on symlink paths and can leave plaintext-linked entries behind in failure cleanup paths.
+- **Security impact**: positive. Failure-path purge now unlinks symlink extra-files entries directly (without recursive traversal) and preserves fail-closed cleanup behavior when encryption fails.
+- **Follow-up**: add permission-denied and concurrent-mutation assertions for purge diagnostics to complete broader edge-case coverage.

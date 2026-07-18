@@ -2208,6 +2208,57 @@ def test_finalize_declared_outputs_deletes_dataset_destination_when_encryption_f
     assert not dataset_output_path.exists()
 
 
+def test_finalize_declared_outputs_unlinks_extra_files_symlink_when_encryption_fails(tmp_path, monkeypatch):
+    output_path = tmp_path / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    real_extra_files = tmp_path / "real_extra_files"
+    real_extra_files.mkdir(parents=True, exist_ok=True)
+    (real_extra_files / "payload.txt").write_text("secret\n")
+
+    extra_files_symlink = tmp_path / "working" / "1_files"
+    extra_files_symlink.symlink_to(real_extra_files, target_is_directory=True)
+
+    extra_files_manifest_path = tmp_path / "_c4gh_stage" / "outputs" / "ds_1.extra_files_manifest.json"
+    extra_files_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    extra_files_manifest_path.write_text("{}")
+
+    def _fail_encrypt(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise RuntimeError("encrypt failed")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fail_encrypt,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="Failed to finalize encrypted Crypt4GH output"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(tmp_path / "marker.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "extra_files_output_path": str(extra_files_symlink),
+                    "extra_files_manifest_path": str(extra_files_manifest_path),
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert not output_path.exists()
+    assert not extra_files_symlink.exists()
+    assert not extra_files_symlink.is_symlink()
+    assert real_extra_files.exists()
+    assert (real_extra_files / "payload.txt").exists()
+
+
 def test_finalize_declared_outputs_deletes_unprocessed_plaintext_outputs_when_any_target_fails(tmp_path, monkeypatch):
     first_output_path = tmp_path / "working" / "1"
     first_output_path.parent.mkdir(parents=True, exist_ok=True)
