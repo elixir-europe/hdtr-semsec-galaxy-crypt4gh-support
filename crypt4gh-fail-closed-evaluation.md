@@ -83,7 +83,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 4) Pulsar / `for_pulsar` branch divergence
 
 - **Gap**: Cleanup/finalization wrapping may not execute identically across Pulsar-oriented command assembly paths.
-- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces shell-command separation between remote-eval wrapper invocation and follow-up tool-script execution, but parity across all Pulsar branches is not fully verified.
+- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation and `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, but parity across all Pulsar branches is not fully verified.
 - **Still needed**:
   - targeted Pulsar branch tests asserting wrapper + postrun + cleanup execution ordering,
   - verification that failure semantics match non-Pulsar remote path.
@@ -444,12 +444,14 @@ The Crypt4GH fail-closed posture in this branch is **closed for the non-Pulsar s
 - **Why**: allowing exact-threshold TTL values leaves no scheduling or transport slack and can admit jobs that cross expiry boundary during execution startup.
 - **Security impact**: positive. Jobs now fail before remote execution when TTL sits exactly at the configured floor, reducing boundary race acceptance for both default and destination-derived minima.
 - **Follow-up**: expand integration coverage for destination-specific and Pulsar paths to validate consistent boundary enforcement outside unit-level gating.
+
 ### 2026-07-18 — Gap #4 enforce Pulsar wrapper command separation in remote command assembly
 
 - **Decision**: ensure Pulsar `remote_command_line` preamble insertion uses explicit shell-command separation (`;`) before subsequent command-builder steps.
 - **Why**: without an explicit separator, the Pulsar wrapper chain (`... && bash ../tool_script.sh`) can concatenate directly into the next command segment (for example `cd working`), risking malformed shell execution and divergence from non-Pulsar sequencing.
 - **Security impact**: positive. Tightens execution determinism for Pulsar command assembly and reduces risk of wrapper/finalization sequencing drift caused by shell-token concatenation.
 - **Follow-up**: add additional Pulsar parity tests that assert wrapper + postrun + cleanup ordering and failure-propagation semantics against non-Pulsar paths.
+
 ### 2026-07-18 — Gap #4 enforce Pulsar wrapper success-gating parity for follow-up commands
 
 - **Decision**: require Pulsar remote wrapper insertion to keep follow-up command-builder steps under `&&` success gating, matching non-Pulsar failure-propagation semantics.
