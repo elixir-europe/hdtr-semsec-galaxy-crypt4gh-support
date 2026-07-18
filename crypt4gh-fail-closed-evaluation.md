@@ -109,7 +109,12 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 6) Output written outside job working directory
 
 - **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
-- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path and discovered hooks now finalize from working-dir paths only; pre-success evidence now also validates payload header bytes for tracked output datasets.
+- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, and JobWrapper now fail-closes before verifier execution when tracked Crypt4GH payload paths resolve outside job-scope roots.
+- **Mitigation implemented**:
+  - Added JobWrapper pre-success scope gate (`_assert_crypt4gh_output_payloads_within_job_scope_roots`) to enforce that tracked Crypt4GH output payload paths stay within job-scope roots (working directory and its parent scope used by current marker/layout conventions).
+  - Gate runs before `verify_crypt4gh_pre_success_output_evidence(...)` and raises fail-closed diagnostics when payload path provenance is out-of-scope.
+  - Added regression coverage:
+    - `test_verify_crypt4gh_pre_success_evidence_fails_for_tracked_payload_outside_job_scope`
 - **Still needed**:
   - stronger constraints on writable paths for Crypt4GH jobs,
   - broader discovery/integration checks for unexpected out-of-tree plaintext artifacts beyond tracked output datasets.
@@ -404,3 +409,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: prior best-effort purge behavior could swallow failure details due to `ignore_errors=True`/fallback branching, reducing operator visibility during race and permission incidents.
 - **Security impact**: positive. Fail-closed behavior is unchanged while race/permission cleanup outcomes become explicit and test-enforced, improving incident triage and hardening confidence.
 - **Follow-up**: extend stress variants to additional filesystem edge conditions (for example mount semantics and deeper extra-files directory mutation races) and keep diagnostics consistency across cleanup entry points.
+
+### 2026-07-18 — Gap #6 add JobWrapper pre-success scope gate for tracked Crypt4GH payload paths
+
+- **Decision**: enforce a pre-success fail-closed scope check in `JobWrapper` so tracked Crypt4GH output payloads must resolve within job-scope roots before the verifier runs.
+- **Why**: payload header validation for tracked datasets is necessary but not sufficient if tracked payload references can drift to out-of-scope paths; this adds explicit provenance enforcement at the final success boundary.
+- **Security impact**: positive. Jobs now fail before success when tracked Crypt4GH payload paths are out-of-scope, reducing risk of silently accepting out-of-tree payload provenance.
+- **Follow-up**: evaluate tightening/parameterizing scope roots per destination mode and expand integration coverage for additional out-of-tree path archetypes.
