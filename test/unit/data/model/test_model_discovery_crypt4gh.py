@@ -361,6 +361,78 @@ def test_resolve_discovered_extension_requires_crypt4gh_without_marker_dir(monke
     assert registry.created_from == ["tabular"]
 
 
+def test_resolve_discovered_extension_does_not_force_crypt4gh_for_empty_marker_dir_without_required_context(
+    tmp_path, monkeypatch
+):
+    registry = _RegistryForExtensionResolution()
+    marker_dir = tmp_path / "job" / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular",
+        job_working_directory=str(tmp_path / "job"),
+    )
+
+    assert resolved == "tabular"
+    assert registry.created_from == []
+
+
+def test_resolve_discovered_extension_uses_dataset_marker_evidence_without_required_context(tmp_path, monkeypatch):
+    registry = _RegistryForExtensionResolution()
+    marker_dir = tmp_path / "job" / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_41.encrypted").write_text("tabular.c4gh\n")
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular",
+        job_working_directory=str(tmp_path / "job"),
+    )
+
+    assert resolved == "tabular.c4gh"
+    assert registry.created_from == ["tabular"]
+
+
+def test_resolve_discovered_extension_treats_marker_dir_list_race_as_no_evidence_without_required_context(monkeypatch):
+    registry = _RegistryForExtensionResolution()
+    marker_dir = "/tmp/marker-dir"
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._first_existing_crypt4gh_marker_directory",
+        lambda **kwargs: marker_dir,
+    )
+    monkeypatch.setattr("galaxy.model.store.discover.os.listdir", lambda path: (_ for _ in ()).throw(FileNotFoundError(path)))
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular",
+        job_working_directory="/tmp/job-dir",
+    )
+
+    assert resolved == "tabular"
+    assert registry.created_from == []
+
+
+def test_resolve_discovered_extension_still_requires_crypt4gh_when_marker_dir_list_races(monkeypatch):
+    registry = _RegistryForExtensionResolution()
+    marker_dir = "/tmp/marker-dir"
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._first_existing_crypt4gh_marker_directory",
+        lambda **kwargs: marker_dir,
+    )
+    monkeypatch.setattr("galaxy.model.store.discover.os.listdir", lambda path: (_ for _ in ()).throw(FileNotFoundError(path)))
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular",
+        job_working_directory="/tmp/job-dir",
+        require_crypt4gh_extension=True,
+    )
+
+    assert resolved == "tabular.c4gh"
+    assert registry.created_from == ["tabular"]
+
+
 def test_set_datasets_metadata_can_require_crypt4gh_extension_resolution(monkeypatch):
     class _PrimaryData:
         states = type("States", (), {"OK": "ok", "FAILED_METADATA": "failed_metadata"})

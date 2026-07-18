@@ -668,11 +668,11 @@ def _resolve_discovered_crypt4gh_extension(
     If the crypt4gh staging marker directory exists, all discovered outputs for the job
     are expected to be encrypted by finalize_declared_crypt4gh_outputs.
     """
-    marker_dir = _first_existing_crypt4gh_marker_directory(job_working_directory=job_working_directory)
-    if marker_dir is None and not require_crypt4gh_extension:
+    if ext == CRYPT4GH_DEFAULT_EXT or ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
         return ext
 
-    if ext == CRYPT4GH_DEFAULT_EXT or ext.endswith(f".{CRYPT4GH_DEFAULT_EXT}"):
+    has_marker_evidence = _has_discovered_crypt4gh_markers(job_working_directory=job_working_directory)
+    if not has_marker_evidence and not require_crypt4gh_extension:
         return ext
 
     datatypes_registry = galaxy.model._get_datatypes_registry()
@@ -691,7 +691,15 @@ def _has_discovered_crypt4gh_markers(*, job_working_directory: str) -> bool:
     designation_markers_path = os.path.join(marker_dir, "discovered_designations.json")
     if os.path.isfile(designation_markers_path):
         return True
-    return any(entry.startswith("path_") and entry.endswith(".encrypted") for entry in os.listdir(marker_dir))
+    try:
+        marker_entries = os.listdir(marker_dir)
+    except OSError:
+        # Marker directory can disappear between the isdir() check and listdir() due to
+        # concurrent cleanup; treat this as no marker evidence and let required contexts
+        # force encrypted extension assignment.
+        return False
+
+    return any((entry.startswith("path_") or entry.startswith("ds_")) and entry.endswith(".encrypted") for entry in marker_entries)
 
 
 def _first_existing_crypt4gh_marker_directory(*, job_working_directory: str) -> Optional[str]:
