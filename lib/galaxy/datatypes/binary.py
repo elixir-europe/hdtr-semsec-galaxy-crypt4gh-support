@@ -511,6 +511,12 @@ class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
             if crypt4gh_header:
                 metadata_header_stream = io.BytesIO(crypt4gh_header)
                 metadata_header = read_and_validate_crypt4gh_header(metadata_header_stream)
+            elif crypt4gh_clear_compute_keypair:
+                # Returned outputs must not retain stale metadata headers copied
+                # from compute-side recrypt metadata; clear path should fall back
+                # to the canonical dataset header unless an explicit replacement
+                # header is supplied.
+                metadata_header = dataset_header
             elif prev_metadata_header:
                 metadata_header = b64decode(prev_metadata_header)
             else:

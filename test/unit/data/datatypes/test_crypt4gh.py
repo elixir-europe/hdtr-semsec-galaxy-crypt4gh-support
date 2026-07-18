@@ -203,6 +203,30 @@ def test_crypt4gh_set_meta_can_clear_compute_keypair_for_returned_outputs(
         assert dataset.metadata.crypt4gh_compute_keypair_expiration_date == ""
 
 
+def test_crypt4gh_set_meta_clear_compute_keypair_resets_stale_metadata_header(
+    c4gh_loader,
+    c4gh_data_complete,
+    c4gh_data_header_recrypted,
+):
+    with c4gh_data_complete as data_complete:
+        dataset = data_complete.dataset
+
+        c4gh_loader.set_meta(dataset=dataset)
+        with c4gh_data_header_recrypted as data_header_recrypted:
+            c4gh_loader.set_meta(
+                dataset=dataset,
+                crypt4gh_header=data_header_recrypted.contents,
+                crypt4gh_compute_keypair_id="cn:148fa23c7",
+                crypt4gh_compute_keypair_expiration_date=datetime(2023, 6, 30, 13, 4),
+            )
+
+        c4gh_loader.set_meta(dataset=dataset, crypt4gh_clear_compute_keypair=True)
+
+        assert dataset.metadata.crypt4gh_compute_keypair_id == ""
+        assert dataset.metadata.crypt4gh_compute_keypair_expiration_date == ""
+        assert dataset.metadata.crypt4gh_metadata_header_sha256 == dataset.metadata.crypt4gh_dataset_header_sha256
+
+
 def test_crypt4gh_set_meta_not_crypt4gh_data(c4gh_loader, c4gh_data_payload, c4gh_data_header):
     with c4gh_data_payload as data_payload:
         with pytest.raises(ValueError):

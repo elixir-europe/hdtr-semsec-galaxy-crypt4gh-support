@@ -462,6 +462,44 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert direct_output_hda.metadata.crypt4gh_compute_keypair_id == ""
         assert direct_output_hda.metadata.crypt4gh_compute_keypair_expiration_date == ""
 
+    def test_metadata_source_outputs_reset_crypt4gh_header_metadata_for_crypt4gh_jobs(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "inheritance_simple",
+            {"input1": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+
+        output_hda_id = run_response["outputs"][0]["id"]
+        output_hda_database_id = self._app.security.decode_id(output_hda_id)
+        output_hda = sa_session.get(model.HistoryDatasetAssociation, output_hda_database_id)
+        assert output_hda is not None
+
+        sa_session.refresh(output_hda)
+        assert output_hda.metadata.crypt4gh_header
+        assert output_hda.metadata.crypt4gh_metadata_header_sha256 == output_hda.metadata.crypt4gh_dataset_header_sha256
+        assert output_hda.metadata.crypt4gh_compute_keypair_id == ""
+        assert output_hda.metadata.crypt4gh_compute_keypair_expiration_date == ""
+
     def test_finalization_failure_marks_job_error_without_plaintext_cleanup_marker(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:

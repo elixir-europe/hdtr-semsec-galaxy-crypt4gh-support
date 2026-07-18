@@ -143,11 +143,17 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 12) Metadata reset gap for “modify input dataset” style tools
 
 - **Gap**: For tools that transform/overwrite based on a specific input dataset, output metadata can retain stale Crypt4GH fields from input metadata. Observed behavior: tags removed and `crypt4gh_dataset_header_sha256` recalculated, but `crypt4gh_header`, `crypt4gh_metadata_header_sha256`, `crypt4gh_compute_keypair_id`, and `crypt4gh_compute_keypair_expiration_date` may not be reset.
-- **Mitigated?**: **Not yet**.
-- **Still needed**:
-  - enforce canonical metadata reset/rewrite policy for all Crypt4GH output finalization paths,
-  - add coverage for modify-input tool archetypes.
-- **Priority / severity**: **High**.
+- **Mitigated?**: **Yes (for metadata-source / modify-input archetype in current flow)**.
+- **Mitigation implemented**:
+  - `Crypt4GHDynamicCompressedArchive.set_meta(...)` now treats `crypt4gh_clear_compute_keypair=True` as a canonical reset path that falls back `crypt4gh_header` to the actual dataset header unless an explicit replacement header is supplied.
+  - This ensures `crypt4gh_metadata_header_sha256` is recomputed from the dataset header in clear mode and can no longer retain stale recrypt metadata-header hashes from inherited input metadata.
+  - Added unit coverage for stale-header reset semantics:
+    - `test_crypt4gh_set_meta_clear_compute_keypair_resets_stale_metadata_header`
+  - Added integration coverage for metadata-source output behavior in remote Crypt4GH flow:
+    - `test_metadata_source_outputs_reset_crypt4gh_header_metadata_for_crypt4gh_jobs`
+- **Residual risk / follow-up**:
+  - broaden coverage to additional modify-input patterns beyond current metadata-source fixture and keep parity checks for non-primary/discovered output variants.
+- **Priority / severity**: **Reduced (Low-Medium; coverage breadth follow-up)**.
 
 ## 13) Discovery-path encryption bypass
 
@@ -243,3 +249,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: the toolshed fixture is not guaranteed to be present in this hermetic integration test environment (HTTP 400 tool-not-found), which produces a false negative unrelated to Crypt4GH logic.
 - **Security impact**: neutral-to-positive. The test still exercises the collection discovery branch that previously bypassed encryption and verifies fail-closed properties (encrypted payloads + no plaintext residue + designation mapping to encrypted outputs).
 - **Follow-up**: add/enable third-party toolshed variant coverage when a stable fixture/install path is available in CI.
+
+### 2026-07-18 — Gap #12 canonical metadata reset in clear-compute-keypair path
+
+- **Decision**: treat `crypt4gh_clear_compute_keypair=True` in `Crypt4GHDynamicCompressedArchive.set_meta(...)` as an explicit canonical reset path for metadata header selection.
+- **Why**: modify-input/metadata-source outputs can inherit stale recrypt header metadata from inputs. Clearing compute keypair fields without resetting the metadata header leaves inconsistent Crypt4GH metadata (`metadata_header_sha256 != dataset_header_sha256`) and stale header provenance.
+- **Security impact**: positive. Returned outputs now clear compute keypair metadata and re-anchor metadata-header hash state to the actual dataset header unless an explicit replacement header is provided by the finalization path.
+- **Follow-up**: expand regression coverage across more modify-input archetypes and non-primary output paths to ensure reset behavior remains consistent.

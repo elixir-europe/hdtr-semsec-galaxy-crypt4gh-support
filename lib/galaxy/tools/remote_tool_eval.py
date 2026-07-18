@@ -219,12 +219,17 @@ def _mark_outputs_for_compute_keypair_clearance(
     for output_target in output_targets:
         if not output_target.get("clear_compute_keypair"):
             continue
-        dataset_output_path = output_target.get("dataset_output_path") or output_target.get("output_path")
-        if not dataset_output_path:
-            continue
-        output_metadata = outputs_by_path.get(str(dataset_output_path))
-        if output_metadata is not None:
-            output_metadata["clear_crypt4gh_compute_keypair"] = True
+        candidate_paths = [
+            output_target.get("dataset_output_path"),
+            output_target.get("output_path"),
+        ]
+        for candidate_path in candidate_paths:
+            if not candidate_path:
+                continue
+            output_metadata = outputs_by_path.get(str(candidate_path))
+            if output_metadata is not None:
+                output_metadata["clear_crypt4gh_compute_keypair"] = True
+                break
 
     with open(metadata_params_path, "w") as metadata_stream:
         json.dump(metadata_params, metadata_stream)

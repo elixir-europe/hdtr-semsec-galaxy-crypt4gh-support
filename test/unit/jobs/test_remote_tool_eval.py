@@ -5,6 +5,7 @@ from pathlib import Path
 from galaxy.tools.remote_tool_eval import (
     _crypt4gh_cleanup_command,
     _crypt4gh_finalize_postrun_command,
+    _mark_outputs_for_compute_keypair_clearance,
     _python_executable_for_embedded_commands,
 )
 
@@ -189,3 +190,35 @@ def test_python_executable_for_embedded_commands_preserves_invocation_path(monke
     resolved = _python_executable_for_embedded_commands()
 
     assert resolved == invocation_path
+
+
+def test_mark_outputs_for_compute_keypair_clearance_falls_back_to_output_path_when_dataset_path_differs(tmp_path):
+    metadata_params_path = tmp_path / "metadata" / "params.json"
+    metadata_params_path.parent.mkdir(parents=True)
+    metadata_params_path.write_text(
+        """
+        {
+          "outputs": {
+            "out1": {
+              "filename_override": "/tmp/job/working/outputs/1",
+              "clear_crypt4gh_compute_keypair": false
+            }
+          }
+        }
+        """.strip()
+    )
+
+    _mark_outputs_for_compute_keypair_clearance(
+        metadata_params_path=str(metadata_params_path),
+        output_targets=[
+            {
+                "association_name": "out1",
+                "clear_compute_keypair": True,
+                "dataset_output_path": "/tmp/object_store/dataset_1.dat",
+                "output_path": "/tmp/job/working/outputs/1",
+            }
+        ],
+    )
+
+    updated = metadata_params_path.read_text()
+    assert '"clear_crypt4gh_compute_keypair": true' in updated
