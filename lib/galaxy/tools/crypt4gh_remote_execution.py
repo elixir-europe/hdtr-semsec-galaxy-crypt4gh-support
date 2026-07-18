@@ -2006,18 +2006,21 @@ def _verify_extra_files_manifest_evidence(
 
 
 def _verify_no_residual_plaintext_staging_artifacts(*, working_directory: str, diagnostics: list[str]) -> None:
-    plaintext_root = Path(working_directory) / "_crypt" / "outputs"
-    if not plaintext_root.exists() or not plaintext_root.is_dir():
-        return
+    crypt_root = Path(working_directory) / "_crypt"
+    plaintext_roots = (crypt_root / "outputs", crypt_root / "inputs")
 
-    for root, _dirs, files in os.walk(plaintext_root):
-        root_path = Path(root)
-        for file_name in files:
-            if file_name != "plaintext":
-                continue
+    for plaintext_root in plaintext_roots:
+        if not plaintext_root.exists() or not plaintext_root.is_dir():
+            continue
 
-            leaked_path = root_path / file_name
-            diagnostics.append(f"plaintext staging artifact remained at path={leaked_path}")
+        for root, _dirs, files in os.walk(plaintext_root):
+            root_path = Path(root)
+            for file_name in files:
+                if file_name != "plaintext":
+                    continue
+
+                leaked_path = root_path / file_name
+                diagnostics.append(f"plaintext staging artifact remained at path={leaked_path}")
 
 
 def _verify_extra_files_payload_header_evidence(

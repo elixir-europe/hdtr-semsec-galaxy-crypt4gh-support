@@ -109,7 +109,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 6) Output written outside job working directory
 
 - **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
-- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, JobWrapper now fail-closes before verifier execution when tracked Crypt4GH payload paths resolve outside job-scope roots, and pre-success verifier now fails closed on residual plaintext staging artifacts under `_crypt/outputs` even when untracked by dataset associations.
+- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, JobWrapper now fail-closes before verifier execution when tracked Crypt4GH payload paths resolve outside job-scope roots, and pre-success verifier now fails closed on residual plaintext staging artifacts under `_crypt/outputs` and `_crypt/inputs` even when untracked by dataset associations.
 - **Mitigation implemented**:
   - Added JobWrapper pre-success scope gate (`_assert_crypt4gh_output_payloads_within_job_scope_roots`) to enforce that tracked Crypt4GH output payload paths stay within job-scope roots (working directory and its parent scope used by current marker/layout conventions).
   - Gate runs before `verify_crypt4gh_pre_success_output_evidence(...)` and raises fail-closed diagnostics when payload path provenance is out-of-scope.
@@ -472,3 +472,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: tracked dataset/marker evidence can be green while stale or untracked plaintext staging files persist, leaving residual plaintext risk beyond association-scoped verification.
 - **Security impact**: positive. Jobs now fail before success when plaintext staging residues remain under Crypt4GH output staging roots, reducing acceptance of partially cleaned plaintext artifacts.
 - **Follow-up**: add integration-level coverage for destination-specific staging layouts and mixed tracked/untracked output topologies.
+
+### 2026-07-18 — Gap #6 extend residual plaintext pre-success checks to `_crypt/inputs`
+
+- **Decision**: expand residual plaintext scan roots from `_crypt/outputs` to include `_crypt/inputs` in pre-success evidence verification.
+- **Why**: input-side plaintext staging can remain after processing and is not always represented by tracked output associations; output-only residual scanning misses this class of residue.
+- **Security impact**: positive. Jobs now fail before success when plaintext staging artifacts remain under either Crypt4GH output or input staging roots.
+- **Follow-up**: add integration-level checks for destination-specific input staging cleanup behavior across remote/Pulsar execution paths.

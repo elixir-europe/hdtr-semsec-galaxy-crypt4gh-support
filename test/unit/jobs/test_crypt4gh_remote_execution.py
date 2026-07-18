@@ -2472,6 +2472,42 @@ def test_pre_success_verifier_fails_for_residual_plaintext_staging_artifact_outs
         )
 
 
+def test_pre_success_verifier_fails_for_residual_plaintext_input_staging_artifact(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_92.encrypted").write_text("tabular.c4gh\n")
+
+    dataset_path = tmp_path / "objects" / "dataset_92.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    leaked_plaintext_path = tmp_path / "_crypt" / "inputs" / "in_1" / "plaintext"
+    leaked_plaintext_path.parent.mkdir(parents=True, exist_ok=True)
+    leaked_plaintext_path.write_text("input plaintext")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="plaintext staging artifact remained"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(92, str(dataset_path))),
+            ],
+        )
+
+
 def test_pre_success_verifier_accepts_designation_extra_files_manifest_for_discovered_output(tmp_path):
     marker_dir = tmp_path / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)
