@@ -522,6 +522,13 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
     def update_object_store_with_datasets(self, datasets, paths, extra_files, output_name):
         assert self.object_store
         for dataset, path, extra_file in zip(datasets, paths, extra_files):
+            _maybe_finalize_crypt4gh_about_to_persist_payload(
+                model_persistence_context=self,
+                primary_data=dataset,
+                filename=path,
+                extra_files_path=extra_file,
+            )
+
             object_store_id = self.override_object_store_id(output_name)
             if object_store_id:
                 dataset.dataset.object_store_id = object_store_id

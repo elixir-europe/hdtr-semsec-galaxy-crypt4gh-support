@@ -6,6 +6,7 @@ from galaxy.util.crypt4gh import CRYPT4GH_DEFAULT_EXT
 from galaxy.model.store.discover import (
     _maybe_finalize_crypt4gh_about_to_persist_payload,
     _resolve_discovered_crypt4gh_extension,
+    ModelPersistenceContext,
 )
 
 
@@ -358,3 +359,118 @@ def test_resolve_discovered_extension_requires_crypt4gh_without_marker_dir(monke
 
     assert resolved == "tabular.c4gh"
     assert registry.created_from == ["tabular"]
+
+
+class _FakeObjectStore:
+    def __init__(self):
+        self.update_calls = []
+
+    def update_from_file(self, dataset, file_name, create=True):
+        self.update_calls.append({"dataset": dataset, "file_name": file_name, "create": create})
+
+
+class _FakeDiscoveredDataset:
+    def __init__(self, *, dataset_id: int, extension: str, designation: str, job_working_directory: str):
+        self.dataset = SimpleNamespace(id=dataset_id, object_store_id=None, get_file_name=lambda sync_cache=False: "")
+        self.extension = extension
+        self.designation = designation
+        self.job_working_directory = job_working_directory
+        self.set_size_calls = []
+
+    def set_size(self, *, no_extra_files: bool = False):
+        self.set_size_calls.append(no_extra_files)
+
+
+def test_collection_discovery_path_finalizes_crypt4gh_before_object_store_persist(tmp_path, monkeypatch):
+    output_path = tmp_path / "outputs" / "sample1.tabular.c4gh"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"crypt4gh")
+
+    finalize_calls = []
+
+    def _fake_finalize_about_to_persist_crypt4gh_payload(**kwargs):
+        finalize_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution.finalize_about_to_persist_crypt4gh_payload",
+        _fake_finalize_about_to_persist_crypt4gh_payload,
+    )
+
+    object_store = _FakeObjectStore()
+    context = SimpleNamespace(
+        object_store=object_store,
+        override_object_store_id=lambda _output_name: None,
+        crypt4gh_output_finalization_context=lambda: {
+            "reencryption_service_url": "http://localhost:8000",
+            "compute_public_key": "-----BEGIN CRYPT4GH PUBLIC KEY-----\nabc\n-----END CRYPT4GH PUBLIC KEY-----\n",
+            "compute_keypair_id": "key-1",
+            "compute_keypair_expiration_date": "",
+        },
+        job_working_directory=str(tmp_path),
+        sa_session=None,
+    )
+    dataset = _FakeDiscoveredDataset(
+        dataset_id=41,
+        extension="tabular.c4gh",
+        designation="sample1",
+        job_working_directory=str(tmp_path),
+    )
+
+    ModelPersistenceContext.update_object_store_with_datasets(
+        context,
+        datasets=[dataset],
+        paths=[str(output_path)],
+        extra_files=[None],
+        output_name="out",
+    )
+
+    assert len(finalize_calls) == 1
+    finalize_call = finalize_calls[0]
+    assert finalize_call["output_path"] == str(output_path)
+    assert finalize_call["encrypted_marker_path"].endswith("_c4gh_stage/outputs/ds_41.encrypted")
+    assert object_store.update_calls and object_store.update_calls[0]["file_name"] == str(output_path)
+
+
+def test_collection_discovery_path_fails_closed_when_crypt4gh_finalization_fails(tmp_path, monkeypatch):
+    output_path = tmp_path / "outputs" / "sample1.tabular.c4gh"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"crypt4gh")
+
+    def _raise_finalize_about_to_persist_crypt4gh_payload(**_kwargs):
+        raise RuntimeError("encryption failed")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution.finalize_about_to_persist_crypt4gh_payload",
+        _raise_finalize_about_to_persist_crypt4gh_payload,
+    )
+
+    object_store = _FakeObjectStore()
+    context = SimpleNamespace(
+        object_store=object_store,
+        override_object_store_id=lambda _output_name: None,
+        crypt4gh_output_finalization_context=lambda: {
+            "reencryption_service_url": "http://localhost:8000",
+            "compute_public_key": "-----BEGIN CRYPT4GH PUBLIC KEY-----\nabc\n-----END CRYPT4GH PUBLIC KEY-----\n",
+            "compute_keypair_id": "key-1",
+            "compute_keypair_expiration_date": "",
+        },
+        job_working_directory=str(tmp_path),
+        sa_session=None,
+    )
+    dataset = _FakeDiscoveredDataset(
+        dataset_id=41,
+        extension="tabular.c4gh",
+        designation="sample1",
+        job_working_directory=str(tmp_path),
+    )
+
+    with pytest.raises(RuntimeError, match="encryption failed"):
+        ModelPersistenceContext.update_object_store_with_datasets(
+            context,
+            datasets=[dataset],
+            paths=[str(output_path)],
+            extra_files=[None],
+            output_name="out",
+        )
+
+    assert object_store.update_calls == []

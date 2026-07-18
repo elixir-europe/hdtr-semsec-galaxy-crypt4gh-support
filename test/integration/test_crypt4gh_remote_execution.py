@@ -246,6 +246,7 @@ class _MockComputeRecryptorServer:
 class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCase):
     framework_tool_and_types = True
     dataset_populator: DatasetPopulator
+    _collection_discovery_split_tool_id = "split"
 
     _default_mock_compute_keypair_id = "mock-compute-key-1"
     _default_mock_compute_keypair_expiration_date = "2099-01-01T00:00:00+00:00"
@@ -666,6 +667,85 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         designation_payload = json.loads(designation_map_path.read_text())
         assert designation_payload.get("sample1", "").endswith(".c4gh")
 
+    def test_collection_discovery_split_outputs_are_encrypted_for_crypt4gh_jobs(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            self._collection_discovery_split_tool_id,
+            {"input1": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+
+        output_collections = run_response["output_collections"]
+        assert len(output_collections) == 1, output_collections
+        hdca_api_id = output_collections[0]["id"]
+        hdca_database_id = self._app.security.decode_id(hdca_api_id)
+        hdca = sa_session.get(model.HistoryDatasetCollectionAssociation, hdca_database_id)
+        assert hdca is not None
+
+        collection_datasets = list(hdca.collection.dataset_instances)
+        assert len(collection_datasets) > 0
+
+        job_database_id = self._app.security.decode_id(job_api_id)
+        job = sa_session.get(model.Job, job_database_id)
+        assert job is not None
+        job_working_directory = self._app.object_store.get_filename(job, base_dir="job_work", dir_only=True, obj_dir=True)
+        assert job_working_directory is not None
+        marker_dir = self._resolve_marker_dir(job_working_directory)
+        assert marker_dir.exists(), marker_dir
+        assert list(marker_dir.glob("path_*.encrypted")) == []
+
+        designation_map_path = marker_dir / "discovered_designations.json"
+        assert designation_map_path.exists(), designation_map_path
+        designation_payload = json.loads(designation_map_path.read_text())
+
+        for collection_dataset in collection_datasets:
+            assert collection_dataset.dataset is not None
+            dataset_details = self.dataset_populator.get_history_dataset_details(
+                history_id,
+                dataset_id=self._app.security.encode_id(collection_dataset.id),
+            )
+            assert dataset_details["extension"].endswith(".c4gh"), dataset_details
+
+            dataset_table_id = collection_dataset.dataset.id
+            assert dataset_table_id is not None
+            dataset_path = Path(collection_dataset.dataset.get_file_name())
+            with dataset_path.open("rb") as dataset_stream:
+                assert dataset_stream.read(8) == b"crypt4gh"
+
+            plaintext_output_path = (
+                Path(job_working_directory) / "_crypt" / "outputs" / f"ds_{dataset_table_id}" / "plaintext"
+            )
+            assert not plaintext_output_path.exists(), plaintext_output_path
+
+            marker_path = marker_dir / f"ds_{dataset_table_id}.encrypted"
+            if marker_path.exists():
+                assert marker_path.read_text().strip().endswith(".c4gh")
+
+            designation = str(dataset_details.get("name") or "")
+            assert designation in designation_payload
+            assert designation_payload[designation].endswith(".c4gh")
+
+        assert all(path.endswith(".c4gh") for path in designation_payload.values())
+
     def test_framework_control_artifacts_remain_plaintext_readable_when_payloads_are_enforced(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
@@ -923,4 +1003,9 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
 instance = integration_util.integration_module_instance(TestCrypt4GHRemoteExecutionIntegration)
 
-test_tools = integration_util.integration_tool_runner(["inheritance_simple", "output_format", "tool_provided_metadata_12"])
+test_tools = integration_util.integration_tool_runner([
+    "split",
+    "inheritance_simple",
+    "output_format",
+    "tool_provided_metadata_12",
+])

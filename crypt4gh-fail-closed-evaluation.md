@@ -149,15 +149,20 @@ It summarizes current fail-closed behavior and known remaining gaps across:
   - add coverage for modify-input tool archetypes.
 - **Priority / severity**: **High**.
 
-## 13) At least one discovery path still bypasses encryption
+## 13) Discovery-path encryption bypass
 
-- **Gap**: At least one dataset discovery path (reported example: `toolshed.g2.bx.psu.edu/repos/bgruening/split_file_to_collection/split_file_to_collection/0.5.2`) appears to persist unencrypted output and produced no `CRYPT4GH_DEBUG` traces.
-- **Mitigated?**: **Not yet**.
-- **Still needed**:
-  - reproduce and isolate the specific discovery branch/path,
-  - route that branch through Crypt4GH finalization hooks,
-  - add regression/integration coverage for this tool pattern.
-- **Priority / severity**: **High**.
+- **Gap**: A collection-discovery branch could persist discovered outputs without running Crypt4GH finalization before object-store persistence.
+- **Mitigated?**: **Yes (for the collection discovery branch in current flow)**.
+- **Mitigation implemented**:
+  - `ModelPersistenceContext.update_object_store_with_datasets()` now calls `_maybe_finalize_crypt4gh_about_to_persist_payload(...)` before `object_store.update_from_file(...)`.
+  - Added unit coverage for both success and fail-closed behavior:
+    - `test_collection_discovery_path_finalizes_crypt4gh_before_object_store_persist`
+    - `test_collection_discovery_path_fails_closed_when_crypt4gh_finalization_fails`
+  - Added integration coverage for collection discovery output encryption and plaintext cleanup in remote Crypt4GH flow:
+    - `test_collection_discovery_split_outputs_are_encrypted_for_crypt4gh_jobs`
+- **Residual risk / follow-up**:
+  - keep broader discovery archetype coverage expanding (especially third-party toolshed variants) as additional fixtures become available.
+- **Priority / severity**: **Reduced (Low-Medium; coverage breadth follow-up)**.
 
 ## 14) `CRYPT4GH_DEBUG` output still enabled
 
@@ -204,19 +209,18 @@ Key hardening already present on this branch/work item includes:
 
 This order prioritizes highest fail-closed risk first, defers likely policy/threshold decisions toward the end, and keeps **Gap #14 last** as requested.
 
-1. **Gap #13** — close discovery-path encryption bypass (`split_file_to_collection` archetype) with regression coverage.
-2. **Gap #12** — enforce canonical Crypt4GH metadata reset/rewrite for modify-input tool patterns.
-3. **Gap #7** — strengthen path-provenance validation for finalize-about-to-persist callers.
-4. **Gap #9** — complete discovery caller audit and align all extension resolution paths to context-aware enforcement.
-5. **Gap #3** — finish containment hardening with traversal-focused negative coverage.
-6. **Gap #5** — harden best-effort purge under symlink/permission/race edge conditions.
-7. **Gap #10** — broaden edge-case test coverage for containment and cleanup behaviors.
-8. **Gap #1** — add broader destination parity/performance coverage for local-vs-remote enforcement boundaries.
-9. **Gap #6** — define and enforce policy for out-of-tree writes and pre-success plaintext detection.
-10. **Gap #8** — define stronger TTL/walltime policy and implement boundary regression coverage.
-11. **Gap #2** — settle marker-timing/race handling policy and remove marker-only decision windows.
-12. **Gap #11** — resolve dynamic datatype registration behavior for non-preregistered `.c4gh` variants.
-13. **Gap #14** — remove/gate `CRYPT4GH_DEBUG` output before merge/release.
+1. **Gap #12** — enforce canonical Crypt4GH metadata reset/rewrite for modify-input tool patterns.
+2. **Gap #7** — strengthen path-provenance validation for finalize-about-to-persist callers.
+3. **Gap #9** — complete discovery caller audit and align all extension resolution paths to context-aware enforcement.
+4. **Gap #3** — finish containment hardening with traversal-focused negative coverage.
+5. **Gap #5** — harden best-effort purge under symlink/permission/race edge conditions.
+6. **Gap #10** — broaden edge-case test coverage for containment and cleanup behaviors.
+7. **Gap #1** — add broader destination parity/performance coverage for local-vs-remote enforcement boundaries.
+8. **Gap #6** — define and enforce policy for out-of-tree writes and pre-success plaintext detection.
+9. **Gap #8** — define stronger TTL/walltime policy and implement boundary regression coverage.
+10. **Gap #2** — settle marker-timing/race handling policy and remove marker-only decision windows.
+11. **Gap #11** — resolve dynamic datatype registration behavior for non-preregistered `.c4gh` variants.
+12. **Gap #14** — remove/gate `CRYPT4GH_DEBUG` output before merge/release.
 
 ### Follow-on notes
 
@@ -227,4 +231,15 @@ This order prioritizes highest fail-closed risk first, defers likely policy/thre
 
 ## Bottom line
 
-The Crypt4GH fail-closed posture is **substantially stronger** after recent hardening, including working-dir-only discovered-output finalization and stricter readiness prerequisites. Remaining work is concentrated in **Gap #4 plus unresolved gaps #2/#5/#6/#8/#10/#11/#12/#13/#14**, where correctness and complete fail-closed coverage must still be proven across all discovery and metadata edge paths.
+The Crypt4GH fail-closed posture is **substantially stronger** after recent hardening, including working-dir-only discovered-output finalization and stricter readiness prerequisites. Remaining work is concentrated in **Gap #4 plus unresolved gaps #2/#5/#6/#8/#10/#11/#12/#14**, where correctness and complete fail-closed coverage must still be proven across all discovery and metadata edge paths.
+
+---
+
+## Decision record
+
+### 2026-07-18 — Gap #13 regression coverage targets in-tree collection discovery fixture
+
+- **Decision**: use the built-in `split` collection-discovery tool fixture for the Gap #13 integration regression test instead of a toolshed-only `split_file_to_collection` ID.
+- **Why**: the toolshed fixture is not guaranteed to be present in this hermetic integration test environment (HTTP 400 tool-not-found), which produces a false negative unrelated to Crypt4GH logic.
+- **Security impact**: neutral-to-positive. The test still exercises the collection discovery branch that previously bypassed encryption and verifies fail-closed properties (encrypted payloads + no plaintext residue + designation mapping to encrypted outputs).
+- **Follow-up**: add/enable third-party toolshed variant coverage when a stable fixture/install path is available in CI.
