@@ -162,7 +162,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, and concurrent-mutation diagnostics assertions for output payload, marker, and manifest cleanup races.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races, and pre-success verifier regression coverage for plaintext extra-files payloads despite manifest presence.
 - **Still needed**:
   - add broader concurrent-mutation cleanup stress tests for extra-files directory race patterns,
   - add Pulsar branch parity tests,
@@ -416,3 +416,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: payload header validation for tracked datasets is necessary but not sufficient if tracked payload references can drift to out-of-scope paths; this adds explicit provenance enforcement at the final success boundary.
 - **Security impact**: positive. Jobs now fail before success when tracked Crypt4GH payload paths are out-of-scope, reducing risk of silently accepting out-of-tree payload provenance.
 - **Follow-up**: evaluate tightening/parameterizing scope roots per destination mode and expand integration coverage for additional out-of-tree path archetypes.
+
+### 2026-07-18 — Gap #10 fail closed on plaintext extra-files payloads even with valid manifest entries
+
+- **Decision**: extend pre-success evidence verification to validate Crypt4GH header bytes for each expected extra-files payload path whenever a complete extra-files manifest is present.
+- **Why**: manifest structure/entries alone can be stale or forged relative to on-disk payload bytes; without payload-byte checks, plaintext extra-files content can evade pre-success failure despite valid manifest metadata.
+- **Security impact**: positive. Jobs now fail before success when any expected extra-files payload remains plaintext, even if marker+manifest evidence appears complete.
+- **Follow-up**: add additional coverage for unreadable/missing extra-files payload diagnostics under concurrent mutation and permission-denied conditions.

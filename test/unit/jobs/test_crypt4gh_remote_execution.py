@@ -577,6 +577,40 @@ def test_should_run_falls_back_to_24h_when_walltime_is_unparseable():
         )
 
 
+def test_should_run_rejects_negative_destination_walltime_and_falls_back_to_default_minimum_ttl():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T03:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_remote_execution_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote", "walltime": "-01:30:00"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
+def test_should_run_rejects_out_of_range_destination_walltime_and_falls_back_to_default_minimum_ttl():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-01T03:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_remote_execution_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote", "walltime": "01:99:00"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
 def test_build_environment_uses_job_destination_walltime_before_any_recrypt_call(monkeypatch):
     dataset = _BuildDataset(
         dataset_id=1,
@@ -2154,6 +2188,45 @@ def test_pre_success_verifier_fails_for_missing_extra_files_manifest(tmp_path):
         )
 
 
+def test_pre_success_verifier_fails_for_plaintext_extra_files_payload_even_when_manifest_entries_exist(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_52.encrypted").write_text("tabular.c4gh\n")
+    (marker_dir / "ds_52.extra_files_manifest.json").write_text(
+        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+    )
+
+    dataset_path = tmp_path / "objects" / "dataset_52.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    extra_files_path = tmp_path / "objects" / "dataset_52_files"
+    extra_files_path.mkdir(parents=True, exist_ok=True)
+    (extra_files_path / "foo.txt").write_bytes(b"PLAINTEXT")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="extra_files payload remained plaintext"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(52, str(dataset_path))),
+            ],
+        )
+
+
 def test_pre_success_verifier_fails_for_missing_extra_files_manifest_for_discovered_output(tmp_path):
     marker_dir = tmp_path / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)
@@ -2734,6 +2807,63 @@ def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_mark
         "concurrent mutation" in record.getMessage().lower()
         and "FileNotFoundError" in record.getMessage()
         and str(marker_path) in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_extra_files_directory_purge_race(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    output_path = tmp_path / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    extra_files_output_path = tmp_path / "working" / "1_files"
+    extra_files_output_path.mkdir(parents=True, exist_ok=True)
+    (extra_files_output_path / "payload.txt").write_text("secret\n")
+
+    def _fail_encrypt(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise RuntimeError("encrypt failed")
+
+    original_rmtree = crypt4gh_remote_execution.shutil.rmtree
+
+    def _race_rmtree(path, *args, **kwargs):
+        if Path(path) == extra_files_output_path:
+            raise FileNotFoundError("simulated concurrent extra-files directory removal")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fail_encrypt,
+    )
+    monkeypatch.setattr(crypt4gh_remote_execution.shutil, "rmtree", _race_rmtree)
+
+    caplog.set_level("WARNING", logger="galaxy.tools.crypt4gh_remote_execution")
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="Failed to finalize encrypted Crypt4GH output"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(tmp_path / "marker.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "extra_files_output_path": str(extra_files_output_path),
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert any(
+        "concurrent mutation" in record.getMessage().lower()
+        and "FileNotFoundError" in record.getMessage()
+        and str(extra_files_output_path) in record.getMessage()
         for record in caplog.records
     )
 

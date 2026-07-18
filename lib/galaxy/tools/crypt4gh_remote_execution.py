@@ -1338,6 +1338,13 @@ def _purge_output_targets_after_finalization_failure(
                     shutil.rmtree(extra_files_output_path)
                 elif extra_files_output_path.exists():
                     extra_files_output_path.unlink()
+            except FileNotFoundError as exc:
+                log.warning(
+                    "Observed concurrent mutation while removing plaintext extra_files candidate %s after Crypt4GH finalization failure (%s: %s)",
+                    extra_files_output_path,
+                    exc.__class__.__name__,
+                    exc,
+                )
             except Exception as exc:
                 log.exception(
                     "Failed to remove plaintext extra_files candidate %s after Crypt4GH finalization failure (%s: %s)",
@@ -1950,6 +1957,7 @@ def _verify_extra_files_manifest_evidence(
     saw_unreadable_manifest = False
     saw_invalid_manifest = False
     saw_missing_entries = False
+    complete_manifest_found = False
     for manifest_path in existing_paths:
         try:
             manifest_payload = json.loads(manifest_path.read_text())
@@ -1964,8 +1972,18 @@ def _verify_extra_files_manifest_evidence(
 
         missing_entries = expected_entries - set(files_payload.keys())
         if not missing_entries:
-            return
+            complete_manifest_found = True
+            break
         saw_missing_entries = True
+
+    if complete_manifest_found:
+        _verify_extra_files_payload_header_evidence(
+            dataset_id=dataset_id,
+            extra_files_path=extra_files_path,
+            expected_entries=expected_entries,
+            diagnostics=diagnostics,
+        )
+        return
 
     if saw_missing_entries:
         diagnostics.append(f"extra_files manifest missing entries for dataset_id={dataset_id}")
@@ -1973,6 +1991,30 @@ def _verify_extra_files_manifest_evidence(
         diagnostics.append(f"extra_files manifest invalid for dataset_id={dataset_id}")
     elif saw_unreadable_manifest:
         diagnostics.append(f"extra_files manifest unreadable for dataset_id={dataset_id}")
+
+
+def _verify_extra_files_payload_header_evidence(
+    *,
+    dataset_id: int,
+    extra_files_path: Path,
+    expected_entries: set[str],
+    diagnostics: list[str],
+) -> None:
+    for relative_path in sorted(expected_entries):
+        payload_path = extra_files_path / relative_path
+        if not payload_path.exists():
+            diagnostics.append(f"extra_files payload missing for dataset_id={dataset_id} path={relative_path}")
+            continue
+
+        try:
+            with payload_path.open("rb") as payload_stream:
+                payload_prefix = payload_stream.read(8)
+        except Exception:
+            diagnostics.append(f"extra_files payload unreadable for dataset_id={dataset_id} path={relative_path}")
+            continue
+
+        if payload_prefix != b"crypt4gh":
+            diagnostics.append(f"extra_files payload remained plaintext for dataset_id={dataset_id} path={relative_path}")
 
 
 def _safe_discovered_designation_token(designation: str) -> str:
