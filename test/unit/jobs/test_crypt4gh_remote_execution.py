@@ -2320,6 +2320,65 @@ def test_finalize_declared_outputs_logs_permission_denied_diagnostics_for_extra_
     )
 
 
+def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_manifest_purge_race(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    output_path = tmp_path / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    extra_files_manifest_path = tmp_path / "_c4gh_stage" / "outputs" / "ds_1.extra_files_manifest.json"
+    extra_files_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    extra_files_manifest_path.write_text("{}")
+
+    def _fail_encrypt(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise RuntimeError("encrypt failed")
+
+    original_unlink = Path.unlink
+
+    def _race_unlink(self, *args, **kwargs):
+        if self == extra_files_manifest_path:
+            if self.exists():
+                original_unlink(self, *args, **kwargs)
+            raise FileNotFoundError("simulated concurrent manifest removal")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fail_encrypt,
+    )
+    monkeypatch.setattr(Path, "unlink", _race_unlink)
+
+    caplog.set_level("WARNING", logger="galaxy.tools.crypt4gh_remote_execution")
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="Failed to finalize encrypted Crypt4GH output"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(tmp_path / "marker.encrypted"),
+                    "encrypted_ext": "tabular.c4gh",
+                    "extra_files_manifest_path": str(extra_files_manifest_path),
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert any(
+        "concurrent mutation" in record.getMessage().lower()
+        and "FileNotFoundError" in record.getMessage()
+        and str(extra_files_manifest_path) in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_finalize_declared_outputs_deletes_unprocessed_plaintext_outputs_when_any_target_fails(tmp_path, monkeypatch):
     first_output_path = tmp_path / "working" / "1"
     first_output_path.parent.mkdir(parents=True, exist_ok=True)

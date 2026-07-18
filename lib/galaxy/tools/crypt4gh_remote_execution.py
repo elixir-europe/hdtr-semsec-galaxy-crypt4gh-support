@@ -1324,6 +1324,13 @@ def _purge_output_targets_after_finalization_failure(
                 )
                 if extra_files_manifest_path.exists():
                     extra_files_manifest_path.unlink()
+            except FileNotFoundError as exc:
+                log.warning(
+                    "Observed concurrent mutation while removing extra_files manifest %s after Crypt4GH finalization failure (%s: %s)",
+                    extra_files_manifest_path,
+                    exc.__class__.__name__,
+                    exc,
+                )
             except Exception as exc:
                 log.exception(
                     "Failed to remove extra_files manifest %s after Crypt4GH finalization failure (%s: %s)",
