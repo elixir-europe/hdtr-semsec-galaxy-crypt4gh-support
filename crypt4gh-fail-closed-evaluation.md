@@ -23,12 +23,12 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 |---|---|---|
 | **Remote input preparation** (`build_crypt4gh_remote_compute_environment`, `_prepare_plaintext_inputs`) | Enforces Crypt4GH presence + metadata + key TTL checks before remote call; fails closed on malformed/failed recrypt/decrypt. | **Covered (strong)** |
 | **Remote tool command wrapping** (`build_crypt4gh_cleanup_wrapped_command`) | Preserves tool/postrun failures and runs cleanup path, propagating cleanup failure marker/exit. | **Covered (strong)** |
-| **Declared output finalization** (`finalize_declared_crypt4gh_outputs`) | Requires explicit `output_path` targets (legacy discovered-selector target rejected), purges on exception. | **Covered (strong)** |
-| **Discovered output finalization** (`_maybe_finalize_crypt4gh_about_to_persist_payload`, `_maybe_finalize_crypt4gh_assigned_primary_output`) | Finalizes `.c4gh` discovered/assigned outputs with marker evidence and optional extra-files manifest tracking. | **Covered (strong)** |
+| **Declared output finalization** (`finalize_declared_crypt4gh_outputs`) | Requires explicit `output_path` targets, enforces working-directory containment for plaintext candidates, and purges on exception. | **Covered (strong)** |
+| **Discovered output finalization** (`_maybe_finalize_crypt4gh_about_to_persist_payload`, `_maybe_finalize_crypt4gh_assigned_primary_output`) | Finalizes `.c4gh` discovered/assigned outputs from working-dir `output_path` only (no `dataset_output_path` passed), then persists encrypted bytes. | **Covered (strong)** |
 | **Extension resolution + marker application** (`_resolve_discovered_crypt4gh_extension`, `_apply_crypt4gh_marked_extensions`) | `require_crypt4gh_extension` hardens resolution when finalization context is active; marker-based extension re-application exists post-collection. | **Covered (partial)** |
 | **Pre-success output evidence verifier** (`verify_crypt4gh_pre_success_output_evidence`) | Validates marker and mapping evidence before successful job completion; can force job error on verifier failure. | **Covered (strong)** |
 | **Error-state cleanup in remote eval** (`remote_tool_eval.py` exception handler, cleanup snippet) | Best-effort cleanup invoked on remote eval failures before script finalization. | **Covered (partial)** |
-| **Local (non-remote) evaluation path** | Transparent-adapted Crypt4GH inputs now fail closed during job-readiness checks unless full remote prerequisites are present (`tool_evaluation_strategy=remote`, `metadata_strategy=extended`, remote staging + matching enabled, reencryption URL set). | **Covered (guarded fail-closed)** |
+| **Local (non-remote) evaluation path** | Crypt4GH readiness now fail-closes unless all required remote settings are present, including `outputs_to_working_directory=true`. | **Covered (guarded fail-closed)** |
 | **Pulsar / `for_pulsar` branch behavior parity** | Known divergence risk in wrapper/cleanup equivalence depending on command assembly path. | **Gap** |
 | **Out-of-tree / arbitrary path payload writes** | Finalize/purge logic can be bypassed by tool writes outside tracked targets/job dir. | **Gap** |
 
@@ -39,14 +39,14 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 1) Local vs remote evaluation
 
 - **Gap**: Crypt4GH finalization/cleanup orchestration is tied to remote tool-evaluation flow; local destinations can skip equivalent finalization safeguards.
-- **Mitigated?**: **Yes (for Crypt4GH inputs in this execution model)**. Readiness now fail-closes for local-strategy jobs whenever Crypt4GH inputs are present, including both transparent-adapted and explicitly `.c4gh`-accepting tool inputs.
+- **Mitigated?**: **Yes (for Crypt4GH inputs in this execution model)**. Readiness now fail-closes unless remote prerequisites are met, including `tool_evaluation_strategy=remote`, `metadata_strategy=extended`, remote staging + transparent matching, `outputs_to_working_directory=true`, and reencryption URL.
 - **Validation added**:
   - readiness-unit coverage for remote prerequisite combinations,
   - integration coverage asserting local strategy is rejected for transparent-adapted Crypt4GH inputs,
   - readiness-unit coverage asserting local strategy is rejected for explicit `.c4gh` tool inputs and non-transparent Crypt4GH input handling.
 - **Still needed**:
   - broader parity/performance testing for additional destination edge combinations where appropriate.
-- **Priority / severity**: **Reduced (remaining risk now Low-Medium, mostly parity/coverage-related)**.
+- **Priority / severity**: **Reduced (Low-Medium, mostly parity/coverage-related)**.
 
 ## 2) Marker-dir timing / race conditions
 
@@ -59,12 +59,12 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 
 ## 3) Purge path safety (containment)
 
-- **Gap**: `_purge_output_targets_after_finalization_failure` deletes paths directly without strict containment checks.
-- **Mitigated?**: **Not yet** (best-effort purge exists but no robust path containment guard).
+- **Gap**: Purge/delete paths require continued hardening against edge-case filesystem behavior.
+- **Mitigated?**: **Largely**. Canonical allowed-root checks now guard finalize and purge path operations for declared and discovered hooks in current flow.
 - **Still needed**:
-  - canonicalize + enforce allowed-root containment (e.g. job working dir / `_c4gh_stage` / known objectstore target),
-  - reject traversal/symlink escape targets before unlink/rmtree.
-- **Priority / severity**: **High**.
+  - explicit symlink/traversal race stress tests,
+  - permission-denied behavior hardening and diagnostics polish.
+- **Priority / severity**: **Medium**.
 
 ## 4) Pulsar / `for_pulsar` branch divergence
 
@@ -87,8 +87,8 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 
 ## 6) Output written outside job working directory
 
-- **Gap**: Tool/postrun may write plaintext outside tracked target set; finalize/purge routines only handle known targets.
-- **Mitigated?**: **Not fully**.
+- **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
+- **Mitigated?**: **Partially**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path and discovered hooks now finalize from working-dir paths only.
 - **Still needed**:
   - stronger constraints on writable paths for Crypt4GH jobs,
   - verification that unexpected plaintext artifacts are detected/fail the job before success.
@@ -97,11 +97,11 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 7) Path construction validation for finalize-about-to-persist
 
 - **Gap**: `finalize_about_to_persist_crypt4gh_payload` accepts string paths from caller context; limited defensive path validation.
-- **Mitigated?**: **Partially** (some existence checks; no full trust-boundary validation).
+- **Mitigated?**: **Partially (improved)**. Allowed-root checks are enforced and discovered hooks no longer pass `dataset_output_path` into finalize calls.
 - **Still needed**:
   - validate path provenance and allowed roots,
   - refuse unsafe/ambiguous targets before finalization/purge actions.
-- **Priority / severity**: **High**.
+- **Priority / severity**: **Medium-High**.
 
 ## 8) Compute-key TTL / expiration window
 
@@ -115,7 +115,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 9) Discovery callers not consistently using `require_crypt4gh_extension`
 
 - **Gap**: Some paths can call module-level extension resolution in ways that bypass context-enforced requirement semantics.
-- **Mitigated?**: **Partially**. `ModelPersistenceContext` path now sets `require_crypt4gh_extension` when finalization context exists.
+- **Mitigated?**: **Partially (improved)**. Key discovered-output hooks are now aligned to working-dir-only finalization semantics and context-driven extension enforcement.
 - **Still needed**:
   - audit and align all discovery/ext resolution entry points,
   - avoid direct calls that bypass context-aware enforcement.
@@ -124,13 +124,48 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially**. Core unit coverage exists for many remote finalization/cleanup/error paths; known legacy mismatch test removed and updated behavior validated.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics and `outputs_to_working_directory` readiness requirement.
 - **Still needed**:
   - add explicit negative tests for path traversal/containment,
-  - add local-evaluation fail-closed tests,
   - add Pulsar branch parity tests,
   - add symlink/permission/race cleanup tests.
 - **Priority / severity**: **High**.
+
+## 11) Dynamic datatype registration warning for non-preregistered `*.c4gh` variants
+
+- **Gap**: Datasets whose base datatype lacks a preregistered `.c4gh` variant (example: `txt.c4gh`) may encrypt successfully but emit registration/runtime warning sequences, including `SafeStringWrapper__...NoneDataset... type() doesn't support MRO entry resolution`.
+- **Mitigated?**: **Not yet**.
+- **Still needed**:
+  - isolate root cause between dynamic datatype creation and wrapper/subclass handling,
+  - add targeted regression tests for non-preregistered datatype families.
+- **Priority / severity**: **Medium-High**.
+
+## 12) Metadata reset gap for “modify input dataset” style tools
+
+- **Gap**: For tools that transform/overwrite based on a specific input dataset, output metadata can retain stale Crypt4GH fields from input metadata. Observed behavior: tags removed and `crypt4gh_dataset_header_sha256` recalculated, but `crypt4gh_header`, `crypt4gh_metadata_header_sha256`, `crypt4gh_compute_keypair_id`, and `crypt4gh_compute_keypair_expiration_date` may not be reset.
+- **Mitigated?**: **Not yet**.
+- **Still needed**:
+  - enforce canonical metadata reset/rewrite policy for all Crypt4GH output finalization paths,
+  - add coverage for modify-input tool archetypes.
+- **Priority / severity**: **High**.
+
+## 13) At least one discovery path still bypasses encryption
+
+- **Gap**: At least one dataset discovery path (reported example: `toolshed.g2.bx.psu.edu/repos/bgruening/split_file_to_collection/split_file_to_collection/0.5.2`) appears to persist unencrypted output and produced no `CRYPT4GH_DEBUG` traces.
+- **Mitigated?**: **Not yet**.
+- **Still needed**:
+  - reproduce and isolate the specific discovery branch/path,
+  - route that branch through Crypt4GH finalization hooks,
+  - add regression/integration coverage for this tool pattern.
+- **Priority / severity**: **High**.
+
+## 14) `CRYPT4GH_DEBUG` output still enabled
+
+- **Gap**: `CRYPT4GH_DEBUG` diagnostic prints are still emitted.
+- **Mitigated?**: **Intentionally deferred** (still useful for current debugging).
+- **Still needed**:
+  - remove or gate debug output behind a dedicated opt-in debug flag before merge/release.
+- **Priority / severity**: **Low (operational hygiene)**.
 
 ---
 
@@ -138,8 +173,8 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 
 Overall posture is **materially improved but not yet complete fail-closed across all execution modes**.
 
-- **Strongest coverage**: remote evaluation path, declared/discovered output finalization hooks, pre-success verifier, cleanup wrapping, marker/mapping evidence checks.
-- **Residual risk concentration**: path safety/containment, local strategy behavior, Pulsar parity, and untracked output locations.
+- **Strongest coverage**: remote evaluation path, declared/discovered output finalization hooks (working-dir-first), pre-success verifier, cleanup wrapping, marker/mapping evidence checks.
+- **Residual risk concentration**: Pulsar parity, untracked output locations, metadata-reset consistency, and unresolved discovery subpaths.
 
 ---
 
@@ -151,57 +186,45 @@ Key hardening already present on this branch/work item includes:
 - context-driven `require_crypt4gh_extension` support in discovery resolution,
 - remote-tool bootstrap/interpreter hardening (GALAXY_PYTHON usage in command factory path),
 - cleanup-wrapped command flow and remote-eval failure cleanup path,
-- pre-success verification gates for payload markers, discovered mapping, and extra-files manifest evidence.
+- pre-success verification gates for payload markers, discovered mapping, and extra-files manifest evidence,
+- working-dir-only discovered-output finalization hook alignment (no `dataset_output_path` in discovered hooks),
+- readiness requirement upgrade to include `outputs_to_working_directory=true` for Crypt4GH flow.
 
 ---
 
 ## Recommendations and proposed next steps
 
-### Progress tracker (updated)
+### Completed gap closures in this cycle
 
-- [x] **Task 1 — Path-containment checks (highest priority)**
-  - Added canonical allowed-root checks for finalize and purge paths in:
-    - `lib/galaxy/tools/crypt4gh_remote_execution.py`
-    - `lib/galaxy/tools/remote_tool_eval.py`
-  - Added/updated tests:
-    - `test/unit/jobs/test_crypt4gh_remote_execution.py`
-      - `test_collect_declared_targets_prefers_false_path_and_tracks_real_path` (asserts `allowed_root_paths` propagation)
-      - `test_finalize_declared_outputs_rejects_targets_outside_allowed_roots`
-    - `test/unit/app/tools/test_crypt4gh_output_finalization_about_to_persist.py`
-      - `test_finalize_about_to_persist_payload_rejects_paths_outside_allowed_roots`
-    - `test/unit/jobs/test_remote_tool_eval.py`
-      - `test_finalize_command_rejects_output_targets_outside_allowed_roots`
-  - Verification run set (all passing):
-    - `pytest -q test/unit/jobs/test_crypt4gh_remote_execution.py -k "collect_declared_targets_prefers_false_path_and_tracks_real_path or finalize_declared_outputs_rejects_targets_outside_allowed_roots or finalize_declared_outputs_deletes_dataset_destination_when_encryption_fails or finalize_about_to_persist_payload_writes_discovered_designation_map"`
-    - `pytest -q test/unit/app/tools/test_crypt4gh_output_finalization_about_to_persist.py -k "rejects_paths_outside_allowed_roots or fail_closed_when_extra_files_manifest_missing_entries or encrypts_extra_files_and_writes_manifest"`
-    - `pytest -q test/unit/jobs/test_remote_tool_eval.py`
-    - `pytest -q test/unit/data/model/test_model_discovery_crypt4gh.py -k "about_to_persist_finalization"`
-    - `pytest -q test/integration/test_crypt4gh_remote_execution.py -k "discovered_dataset_extra_files_are_encrypted_and_manifested_for_crypt4gh_jobs or transparent_adapted_inputs_fail_closed_when_tool_evaluation_strategy_is_local"`
+- **Gap #3 (partial)**: canonical allowed-root checks now guard finalize and purge path operations for current declared/discovered hooks.
+- **Gap #7 (partial)**: finalize-about-to-persist path handling now includes allowed-root checks, and discovered hooks no longer pass `dataset_output_path` into finalize calls.
+- **Gap #1 (major mitigation)**: readiness now fail-closes local execution for Crypt4GH inputs unless required remote settings are present, including `outputs_to_working_directory=true`.
 
-- [x] **Task 2 — Local evaluation tests and policy hardening**
-  - Completed for this scope: readiness fail-closes local execution for Crypt4GH inputs (transparent-adapted and explicit `.c4gh`-accepting inputs), with unit + integration verification.
+### Proposed fix order for remaining gaps (excluding Gap #4)
 
-- [ ] **Task 3 — Pulsar wrapper parity tests/hardening**
-  - Not started in this change set; user requested a plan discussion pause before implementation.
+This order prioritizes highest fail-closed risk first, defers likely policy/threshold decisions toward the end, and keeps **Gap #14 last** as requested.
 
-### Immediate next steps (proposed)
+1. **Gap #13** — close discovery-path encryption bypass (`split_file_to_collection` archetype) with regression coverage.
+2. **Gap #12** — enforce canonical Crypt4GH metadata reset/rewrite for modify-input tool patterns.
+3. **Gap #7** — strengthen path-provenance validation for finalize-about-to-persist callers.
+4. **Gap #9** — complete discovery caller audit and align all extension resolution paths to context-aware enforcement.
+5. **Gap #3** — finish containment hardening with traversal-focused negative coverage.
+6. **Gap #5** — harden best-effort purge under symlink/permission/race edge conditions.
+7. **Gap #10** — broaden edge-case test coverage for containment and cleanup behaviors.
+8. **Gap #1** — add broader destination parity/performance coverage for local-vs-remote enforcement boundaries.
+9. **Gap #6** — define and enforce policy for out-of-tree writes and pre-success plaintext detection.
+10. **Gap #8** — define stronger TTL/walltime policy and implement boundary regression coverage.
+11. **Gap #2** — settle marker-timing/race handling policy and remove marker-only decision windows.
+12. **Gap #11** — resolve dynamic datatype registration behavior for non-preregistered `.c4gh` variants.
+13. **Gap #14** — remove/gate `CRYPT4GH_DEBUG` output before merge/release.
 
-1. **Path-containment checks (highest priority)**
-   - ✅ Implemented in this cycle; move to maintenance/edge-case follow-up.
-2. **Local evaluation tests and policy hardening**
-   - Prove fail-closed behavior for non-remote destinations or explicitly disable Crypt4GH transparent staging for local strategy.
-3. **Pulsar wrapper parity tests/hardening**
-   - Verify cleanup/finalize wrapper equivalence and failure semantics for Pulsar/`for_pulsar` command paths.
+### Follow-on notes
 
-### Follow-on recommendations
-
-- Add symlink/permission/race stress tests for cleanup.
-- Add out-of-tree write detection checks before marking job success.
-- Add TTL boundary tests (near-expiry and expiration during long jobs).
-- Complete caller audit for consistent `require_crypt4gh_extension` usage.
+- Gaps near the end of the order are intentionally the ones most likely to require policy confirmation or threshold decisions.
+- Gap #10 is still broad; in practice, tests should be added incrementally while fixing each earlier gap.
 
 ---
 
 ## Bottom line
 
-The Crypt4GH fail-closed posture after the newest plan implementation is **substantially stronger**, especially in remote execution + finalization + verifier flows. Remaining work is focused on **closing path-safety and execution-mode parity gaps** so plaintext persistence is prevented consistently under all relevant runtime conditions.
+The Crypt4GH fail-closed posture is **substantially stronger** after recent hardening, including working-dir-only discovered-output finalization and stricter readiness prerequisites. Remaining work is concentrated in **Gap #4 plus unresolved gaps #2/#5/#6/#8/#10/#11/#12/#13/#14**, where correctness and complete fail-closed coverage must still be proven across all discovery and metadata edge paths.
