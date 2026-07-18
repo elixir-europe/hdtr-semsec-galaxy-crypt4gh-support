@@ -1253,7 +1253,62 @@ def test_collect_declared_targets_prefers_false_path_and_tracks_real_path(tmp_pa
     ]
 
 
-def test_collect_declared_targets_logs_debug_resolution_payload(tmp_path, capsys):
+def test_collect_declared_targets_does_not_emit_debug_resolution_payload_by_default(tmp_path, capsys):
+    class _OutputDataset:
+        def __init__(self):
+            self.dataset = _DatasetWrapper(dataset_id=42)
+            self.ext = "tabular"
+
+    class _DatasetPath:
+        def __init__(self, false_path: str, real_path: str):
+            self.false_path = false_path
+            self.real_path = real_path
+
+    class _OutputJobIO:
+        def __init__(self, false_path: str, real_path: str):
+            self._outputs = {
+                "sample": (
+                    _OutputDataset(),
+                    _DatasetPath(false_path, real_path),
+                )
+            }
+
+        def get_output_hdas_and_fnames(self):
+            return self._outputs
+
+    class _DatatypesRegistry:
+        def get_datatype_by_extension(self, _ext):
+            return object()
+
+        def get_or_create_crypt4gh_datatype(self, _ext):
+            return object()
+
+    false_path = tmp_path / "working" / "dataset_42.dat"
+    false_path.parent.mkdir(parents=True, exist_ok=True)
+    false_path.write_text("sample\n")
+    real_path = tmp_path / "object_store" / "dataset_42.dat"
+    real_path.parent.mkdir(parents=True, exist_ok=True)
+    real_path.write_text("sample\n")
+
+    class _ToolOutput:
+        format = "tabular"
+        from_work_dir = None
+
+    collect_declared_crypt4gh_output_targets(
+        job_io=_OutputJobIO(str(false_path), str(real_path)),
+        tool_outputs={"sample": _ToolOutput()},
+        datatypes_registry=_DatatypesRegistry(),
+        working_directory=str(tmp_path),
+    )
+
+    captured = capsys.readouterr()
+    debug_lines = [line for line in captured.out.splitlines() if line.startswith("CRYPT4GH_DEBUG ")]
+    assert debug_lines == []
+
+
+def test_collect_declared_targets_emits_debug_resolution_payload_when_opted_in(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("GALAXY_CRYPT4GH_DEBUG", "1")
+
     class _OutputDataset:
         def __init__(self):
             self.dataset = _DatasetWrapper(dataset_id=42)

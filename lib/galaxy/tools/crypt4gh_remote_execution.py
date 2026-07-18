@@ -1046,6 +1046,9 @@ def _print_declared_output_target_debug(
     real_path: Any,
     working_directory: str,
 ) -> None:
+    if os.getenv("GALAXY_CRYPT4GH_DEBUG", "") != "1":
+        return
+
     debug_payload = {
         "event": "crypt4gh_declared_output_target",
         "output_name": output_name,
