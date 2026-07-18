@@ -159,13 +159,13 @@ def wrap_with_safe_string(value, no_wrap_classes=None):
                 return this_type((__do_wrap(x[0]), __do_wrap(x[1])) for x in value.items())
         # Create a dynamic class that joins SafeStringWrapper with the object being wrapped.
         # This allows e.g. isinstance to continue to work.
-        try:
+        if inspect.isclass(value):
             wrapped_class_name = value.__name__
             wrapped_class = value
-        except Exception:
+        else:
             wrapped_class_name = value.__class__.__name__
             wrapped_class = value.__class__
-        if value_mod := inspect.getmodule(value):
+        if value_mod := inspect.getmodule(wrapped_class):
             wrapped_class_name = f"{value_mod.__name__}.{wrapped_class_name}"
         wrapped_class_name = (
             f"SafeStringWrapper__{wrapped_class_name}__{'__'.join(sorted(c.__name__ for c in no_wrap_classes))}"
