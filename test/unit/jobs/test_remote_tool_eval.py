@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +9,21 @@ from galaxy.tools.remote_tool_eval import (
     _mark_outputs_for_compute_keypair_clearance,
     _python_executable_for_embedded_commands,
 )
+
+
+def _python_with_sitecustomize(*, tmp_path: Path, sitecustomize_source: str) -> str:
+    injection_root = tmp_path / "sitecustomize_injection"
+    injection_root.mkdir(parents=True, exist_ok=True)
+    (injection_root / "sitecustomize.py").write_text(sitecustomize_source)
+
+    wrapped_python = tmp_path / "wrapped_python.sh"
+    wrapped_python.write_text(
+        "#!/bin/sh\n"
+        f"export PYTHONPATH={str(injection_root)}:$PYTHONPATH\n"
+        f"exec {sys.executable} \"$@\"\n"
+    )
+    wrapped_python.chmod(0o755)
+    return str(wrapped_python)
 
 
 def test_cleanup_command_best_effort_removes_plaintext_even_when_import_fails(tmp_path):
@@ -189,6 +205,144 @@ def test_finalize_command_best_effort_purge_unlinks_extra_files_directory_symlin
     assert not extra_files_symlink.exists()
     assert real_extra_files.exists()
     assert (real_extra_files / "payload.txt").exists()
+
+
+def test_finalize_command_best_effort_purge_logs_concurrent_mutation_for_unlink_race(tmp_path):
+    galaxy_lib_for_finalize = "/tmp/galaxy/lib"
+
+    working_root = tmp_path / "job"
+    working_root.mkdir(parents=True, exist_ok=True)
+    output_path = working_root / "dataset.dat"
+    output_path.write_text("PLAINTEXT")
+    metadata_params_path = tmp_path / "metadata" / "params.json"
+    metadata_params_path.parent.mkdir(parents=True)
+    metadata_params_path.write_text('{"outputs": {}}')
+
+    wrapped_python = _python_with_sitecustomize(
+        tmp_path=tmp_path,
+        sitecustomize_source=(
+            "import os\n"
+            "_TARGET = os.environ.get('CRYPT4GH_TEST_UNLINK_RACE_TARGET', '')\n"
+            "_ORIGINAL_UNLINK = os.unlink\n"
+            "def _patched_unlink(path, *args, **kwargs):\n"
+            "    if not isinstance(path, (str, bytes, os.PathLike)) and args:\n"
+            "        path, args = args[0], args[1:]\n"
+            "    if _TARGET and os.path.abspath(path) == os.path.abspath(_TARGET):\n"
+            "        try:\n"
+            "            _ORIGINAL_UNLINK(path, *args, **kwargs)\n"
+            "        except FileNotFoundError:\n"
+            "            pass\n"
+            "        raise FileNotFoundError('simulated concurrent mutation')\n"
+            "    return _ORIGINAL_UNLINK(path, *args, **kwargs)\n"
+            "os.unlink = _patched_unlink\n"
+        ),
+    )
+
+    command = _crypt4gh_finalize_postrun_command(
+        output_targets=[
+            {
+                "association_name": "out1",
+                "output_path": str(output_path),
+                "plaintext_path": str(working_root / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+                "encrypted_marker_path": str(working_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"),
+                "encrypted_ext": "txt.c4gh",
+                "clear_compute_keypair": True,
+            }
+        ],
+        metadata_params_path=str(metadata_params_path),
+        galaxy_lib_for_finalize=galaxy_lib_for_finalize,
+        reencryption_service_url="http://127.0.0.1:36667",
+        compute_public_key="invalid-public-key",
+        compute_keypair_id="mock-keypair",
+        compute_keypair_expiration_date="2099-01-01T00:00:00+00:00",
+        python_executable=wrapped_python,
+        allowed_root_paths=[str(working_root.resolve())],
+    )
+
+    completed = subprocess.run(
+        ["/bin/bash", "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "CRYPT4GH_TEST_UNLINK_RACE_TARGET": str(output_path),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "ModuleNotFoundError" in completed.stderr
+    assert "best-effort purge observed concurrent mutation" in completed.stderr
+    assert "FileNotFoundError" in completed.stderr
+
+
+def test_finalize_command_best_effort_purge_logs_permission_errors_without_masking_finalize_failure(tmp_path):
+    galaxy_lib_for_finalize = str(Path(__file__).resolve().parents[3] / "lib")
+
+    working_root = tmp_path / "job"
+    working_root.mkdir(parents=True, exist_ok=True)
+    output_path = working_root / "dataset.dat"
+    output_path.write_text("PLAINTEXT")
+
+    extra_files_dir = working_root / "dataset.dat_extra"
+    extra_files_dir.mkdir(parents=True, exist_ok=True)
+    (extra_files_dir / "payload.txt").write_text("EXTRA")
+
+    metadata_params_path = tmp_path / "metadata" / "params.json"
+    metadata_params_path.parent.mkdir(parents=True)
+    metadata_params_path.write_text('{"outputs": {}}')
+
+    wrapped_python = _python_with_sitecustomize(
+        tmp_path=tmp_path,
+        sitecustomize_source=(
+            "import os\n"
+            "import shutil\n"
+            "_TARGET = os.environ.get('CRYPT4GH_TEST_RMTREE_PERMISSION_TARGET', '')\n"
+            "_ORIGINAL_RMTREE = shutil.rmtree\n"
+            "def _patched_rmtree(path, *args, **kwargs):\n"
+            "    if _TARGET and os.path.abspath(path) == os.path.abspath(_TARGET):\n"
+            "        raise PermissionError('simulated permission denied during purge')\n"
+            "    return _ORIGINAL_RMTREE(path, *args, **kwargs)\n"
+            "shutil.rmtree = _patched_rmtree\n"
+        ),
+    )
+
+    command = _crypt4gh_finalize_postrun_command(
+        output_targets=[
+            {
+                "association_name": "out1",
+                "output_path": str(output_path),
+                "plaintext_path": str(working_root / "_crypt" / "outputs" / "ds_1" / "plaintext"),
+                "encrypted_marker_path": str(working_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"),
+                "encrypted_ext": "txt.c4gh",
+                "extra_files_output_path": str(extra_files_dir),
+                "clear_compute_keypair": True,
+            }
+        ],
+        metadata_params_path=str(metadata_params_path),
+        galaxy_lib_for_finalize=galaxy_lib_for_finalize,
+        reencryption_service_url="http://127.0.0.1:36667",
+        compute_public_key="public-key",
+        compute_keypair_id="mock-keypair",
+        compute_keypair_expiration_date="2099-01-01T00:00:00+00:00",
+        python_executable=wrapped_python,
+        allowed_root_paths=[str(working_root.resolve())],
+    )
+
+    completed = subprocess.run(
+        ["/bin/bash", "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "CRYPT4GH_TEST_RMTREE_PERMISSION_TARGET": str(extra_files_dir),
+        },
+    )
+
+    assert completed.returncode != 0
+    assert "best-effort purge failed" in completed.stderr
+    assert "PermissionError" in completed.stderr
 
 
 def test_finalize_command_rejects_output_targets_outside_allowed_roots(tmp_path):

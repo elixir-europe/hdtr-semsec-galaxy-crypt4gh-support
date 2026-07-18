@@ -93,9 +93,14 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 - **Mitigation implemented**:
   - Best-effort postrun purge now validates each purge candidate against `_ALLOWED_ROOTS` before delete operations in the embedded finalize script.
   - Best-effort postrun purge now treats symlink paths as unlink targets (using `lexists` + `islink` + `unlink`) rather than recursing through symlinked directories.
+  - Best-effort postrun purge now emits explicit race/permission diagnostics when delete operations fail under hostile timing or filesystem permissions:
+    - `Crypt4GH best-effort purge observed concurrent mutation for <path> (FileNotFoundError: ...)`
+    - `Crypt4GH best-effort purge failed for <path> (PermissionError: ...)`
   - Added regression coverage for both behaviors:
     - `test_finalize_command_best_effort_purge_skips_paths_outside_allowed_roots_on_import_failure`
     - `test_finalize_command_best_effort_purge_unlinks_extra_files_directory_symlink_on_import_failure`
+    - `test_finalize_command_best_effort_purge_logs_concurrent_mutation_for_unlink_race`
+    - `test_finalize_command_best_effort_purge_logs_permission_errors_without_masking_finalize_failure`
 - **Still needed**:
   - permission-denied and concurrent-mutation stress coverage,
   - clearer operator diagnostics for partial purge outcomes under hostile runtime conditions.
@@ -392,3 +397,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: always-on debug prints are operational noise and should not leak into normal runtime output; developers still need an explicit troubleshooting switch.
 - **Security impact**: positive. Reduces accidental sensitive-context exposure in routine logs/stdout while preserving controlled diagnostics when explicitly enabled.
 - **Follow-up**: apply the same opt-in gate to any future `CRYPT4GH_DEBUG` diagnostic surfaces.
+
+### 2026-07-18 — Gap #5 broaden best-effort purge diagnostics for race and permission stress
+
+- **Decision**: strengthen embedded best-effort purge diagnostics in remote postrun finalize flow by classifying removal failures into explicit concurrent-mutation (`FileNotFoundError`) and purge-failure (`PermissionError`/other) messages.
+- **Why**: prior best-effort purge behavior could swallow failure details due to `ignore_errors=True`/fallback branching, reducing operator visibility during race and permission incidents.
+- **Security impact**: positive. Fail-closed behavior is unchanged while race/permission cleanup outcomes become explicit and test-enforced, improving incident triage and hardening confidence.
+- **Follow-up**: extend stress variants to additional filesystem edge conditions (for example mount semantics and deeper extra-files directory mutation races) and keep diagnostics consistency across cleanup entry points.
