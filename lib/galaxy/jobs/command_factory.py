@@ -221,7 +221,7 @@ def __handle_remote_command_line_building(commands_builder, job_wrapper: "Minima
             # TODO: that's not how to do this, pulsar doesn't execute an externalized script by default.
             # This also breaks rewriting paths etc, so it doesn't really work if there are no shared paths
             command = f"{command} && bash ../tool_script.sh"
-            commands_builder.prepend_command(command, sep="")
+            commands_builder.prepend_command(command, sep=";")
         else:
             commands_builder.commands = f"{command} && ( {commands_builder.commands} )"
 
