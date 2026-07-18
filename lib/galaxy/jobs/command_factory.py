@@ -1,4 +1,5 @@
 import json
+import shlex
 import typing
 from logging import getLogger
 from os import (
@@ -239,7 +240,7 @@ def __handle_remote_command_line_building(
                 script_path = join(str(script_directory), "tool_script.sh")
             else:
                 script_path = "../tool_script.sh"
-            command = f"{command} && {remote_tool_script_shell} {script_path}"
+            command = f"{command} && {remote_tool_script_shell} {shlex.quote(script_path)}"
             commands_builder.commands = f"{command} && ( {commands_builder.commands} )"
         else:
             commands_builder.commands = f"{command} && ( {commands_builder.commands} )"

@@ -145,6 +145,20 @@ class TestCommandFactory(TestCase):
         assert "&& bash ../tool_script.sh" not in command
         assert "&& /bin/dash /pulsar/scripts/tool_script.sh && ( cd working;" in command
 
+    def test_remote_tool_eval_for_pulsar_quotes_script_path_when_directory_contains_spaces(self):
+        self.include_work_dir_outputs = False
+        self.job_wrapper.remote_command_line = True
+
+        command = self.__command(
+            remote_command_params={
+                "pulsar_version": "1.0.0",
+                "script_directory": "/pulsar/scripts with space",
+            }
+        )
+
+        assert "&& /bin/sh /pulsar/scripts with space/tool_script.sh &&" not in command
+        assert "&& /bin/sh '/pulsar/scripts with space/tool_script.sh' && ( cd working;" in command
+
     def test_remote_tool_eval_for_pulsar_does_not_use_single_command_success_gating_for_followup_chain(self):
         self.include_work_dir_outputs = False
         self.job_wrapper.remote_command_line = True
