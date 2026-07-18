@@ -126,7 +126,12 @@ def build_command(
         # but Pulsar automatically changes into the working dir, whereas Galaxy does not.
         commands_builder.prepend_command("cd working")
 
-    __handle_remote_command_line_building(commands_builder, job_wrapper, for_pulsar=for_pulsar)
+    __handle_remote_command_line_building(
+        commands_builder,
+        job_wrapper,
+        for_pulsar=for_pulsar,
+        remote_command_params=remote_command_params,
+    )
 
     if container_monitor_command := job_wrapper.container_monitor_command(container):
         commands_builder.prepend_command(container_monitor_command)
@@ -209,8 +214,14 @@ def __externalize_commands(
     return commands
 
 
-def __handle_remote_command_line_building(commands_builder, job_wrapper: "MinimalJobWrapper", for_pulsar=False):
+def __handle_remote_command_line_building(
+    commands_builder,
+    job_wrapper: "MinimalJobWrapper",
+    for_pulsar=False,
+    remote_command_params=None,
+):
     if job_wrapper.remote_command_line:
+        remote_command_params = remote_command_params or {}
         command = (
             "mkdir -p outputs; "
             "touch outputs/tool_stdout outputs/tool_stderr; "
@@ -223,7 +234,12 @@ def __handle_remote_command_line_building(commands_builder, job_wrapper: "Minima
             remote_tool_script_shell = job_wrapper.shell
             if not remote_tool_script_shell or str(remote_tool_script_shell).lower() == "none":
                 remote_tool_script_shell = "/bin/sh"
-            command = f"{command} && {remote_tool_script_shell} ../tool_script.sh"
+            script_directory = remote_command_params.get("script_directory")
+            if script_directory:
+                script_path = join(str(script_directory), "tool_script.sh")
+            else:
+                script_path = "../tool_script.sh"
+            command = f"{command} && {remote_tool_script_shell} {script_path}"
             commands_builder.commands = f"{command} && ( {commands_builder.commands} )"
         else:
             commands_builder.commands = f"{command} && ( {commands_builder.commands} )"
