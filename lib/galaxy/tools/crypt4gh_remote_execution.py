@@ -1922,16 +1922,13 @@ def _verify_extra_files_manifest_evidence(
     if not extra_files_path.exists() or not extra_files_path.is_dir():
         return
 
-    expected_entries: set[str] = set()
+    observed_entries: set[str] = set()
     for root, _dirs, files in os.walk(extra_files_path):
         root_path = Path(root)
         for file_name in files:
             source_path = root_path / file_name
             relative_path = os.path.relpath(source_path, extra_files_path)
-            expected_entries.add(relative_path.replace(os.sep, "/"))
-
-    if not expected_entries:
-        return
+            observed_entries.add(relative_path.replace(os.sep, "/"))
 
     manifest_paths = [marker_dir / f"ds_{dataset_id}.extra_files_manifest.json" for marker_dir in marker_dirs]
     discovered_designation = discovered_designation or _resolve_discovered_designation(getattr(dataset, "designation", ""))
@@ -1958,6 +1955,7 @@ def _verify_extra_files_manifest_evidence(
     saw_invalid_manifest = False
     saw_missing_entries = False
     complete_manifest_found = False
+    expected_payload_entries: set[str] = set()
     for manifest_path in existing_paths:
         try:
             manifest_payload = json.loads(manifest_path.read_text())
@@ -1970,9 +1968,18 @@ def _verify_extra_files_manifest_evidence(
             saw_invalid_manifest = True
             continue
 
-        missing_entries = expected_entries - set(files_payload.keys())
+        manifest_entries = set(files_payload.keys())
+        if not observed_entries:
+            if manifest_entries:
+                complete_manifest_found = True
+                expected_payload_entries = manifest_entries
+                break
+            continue
+
+        missing_entries = observed_entries - manifest_entries
         if not missing_entries:
             complete_manifest_found = True
+            expected_payload_entries = manifest_entries
             break
         saw_missing_entries = True
 
@@ -1980,7 +1987,7 @@ def _verify_extra_files_manifest_evidence(
         _verify_extra_files_payload_header_evidence(
             dataset_id=dataset_id,
             extra_files_path=extra_files_path,
-            expected_entries=expected_entries,
+            expected_entries=expected_payload_entries,
             diagnostics=diagnostics,
         )
         return

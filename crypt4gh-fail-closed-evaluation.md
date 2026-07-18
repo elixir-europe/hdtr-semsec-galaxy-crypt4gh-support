@@ -162,7 +162,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races, and pre-success verifier regression coverage for plaintext extra-files payloads despite manifest presence.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races, and pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads under manifest-presence and scan-race conditions.
 - **Still needed**:
   - add broader concurrent-mutation cleanup stress tests for extra-files directory race patterns,
   - add Pulsar branch parity tests,
@@ -430,3 +430,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: reading header bytes through symlinks permits path indirection outside intended payload provenance; a symlink can satisfy marker/manifest shape while pointing at uncontrolled paths.
 - **Security impact**: positive. Jobs now fail before success when expected extra-files payload entries resolve as symlinks, tightening provenance guarantees for pre-success evidence.
 - **Follow-up**: extend pre-success extra-files checks for additional link-like path forms under destination-specific filesystems and Pulsar parity paths.
+
+### 2026-07-18 — Gap #10 fail closed on missing/unreadable extra-files payload evidence under scan-race and permission-denied conditions
+
+- **Decision**: when an extra-files manifest exists and includes file entries, treat those manifest entries as expected payload evidence even if directory scanning yields zero files, and fail pre-success for missing or unreadable payload bytes.
+- **Why**: concurrent mutation can remove or hide directory entries between scan and verification; relying only on live `os.walk(...)` results can silently bypass payload-byte checks exactly when race/permission hardening matters most.
+- **Security impact**: positive. Jobs now fail before success when manifest-declared extra-files payloads are missing or unreadable, including scan-race + permission-denied scenarios.
+- **Follow-up**: add Pulsar parity coverage for this manifest-authoritative payload-evidence behavior and extend stress cases for transient filesystem semantics.

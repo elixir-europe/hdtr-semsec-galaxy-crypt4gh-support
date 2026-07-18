@@ -2270,6 +2270,101 @@ def test_pre_success_verifier_fails_for_symlinked_extra_files_payload_even_when_
         )
 
 
+def test_pre_success_verifier_fails_for_missing_extra_files_payload_when_manifest_entries_exist(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_54.encrypted").write_text("tabular.c4gh\n")
+    (marker_dir / "ds_54.extra_files_manifest.json").write_text(
+        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+    )
+
+    dataset_path = tmp_path / "objects" / "dataset_54.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    extra_files_path = tmp_path / "objects" / "dataset_54_files"
+    extra_files_path.mkdir(parents=True, exist_ok=True)
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="extra_files payload missing"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(54, str(dataset_path))),
+            ],
+        )
+
+
+def test_pre_success_verifier_fails_for_unreadable_extra_files_payload_under_scan_race(tmp_path, monkeypatch):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_55.encrypted").write_text("tabular.c4gh\n")
+    (marker_dir / "ds_55.extra_files_manifest.json").write_text(
+        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+    )
+
+    dataset_path = tmp_path / "objects" / "dataset_55.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    extra_files_path = tmp_path / "objects" / "dataset_55_files"
+    extra_files_path.mkdir(parents=True, exist_ok=True)
+    payload_path = extra_files_path / "foo.txt"
+    payload_path.write_bytes(b"crypt4ghpayload")
+
+    def _scan_race_walk(_path, *args, **kwargs):
+        del _path
+        del args
+        del kwargs
+        return []
+
+    original_open = Path.open
+
+    def _permission_denied_open(path_self, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path_self == payload_path and mode == "rb":
+            raise PermissionError("simulated permission denied")
+        return original_open(path_self, *args, **kwargs)
+
+    monkeypatch.setattr(crypt4gh_remote_execution.os, "walk", _scan_race_walk)
+    monkeypatch.setattr(Path, "open", _permission_denied_open)
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="extra_files payload unreadable"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(55, str(dataset_path))),
+            ],
+        )
+
+
 def test_pre_success_verifier_fails_for_missing_extra_files_manifest_for_discovered_output(tmp_path):
     marker_dir = tmp_path / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)
