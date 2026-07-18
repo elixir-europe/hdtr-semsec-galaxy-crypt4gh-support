@@ -162,11 +162,11 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races, and pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads under manifest-presence and scan-race conditions.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races, pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads under manifest-presence and scan-race conditions, and TTL boundary checks that fail closed at exact threshold to reduce race-window acceptance.
 - **Still needed**:
   - add broader concurrent-mutation cleanup stress tests for extra-files directory race patterns,
   - add Pulsar branch parity tests,
-  - add additional TTL boundary and race-window scenarios.
+  - add additional TTL race-window scenarios across destination/integration paths.
 - **Priority / severity**: **High**.
 
 ## 11) Dynamic datatype registration warning for non-preregistered `*.c4gh` variants
@@ -437,3 +437,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: concurrent mutation can remove or hide directory entries between scan and verification; relying only on live `os.walk(...)` results can silently bypass payload-byte checks exactly when race/permission hardening matters most.
 - **Security impact**: positive. Jobs now fail before success when manifest-declared extra-files payloads are missing or unreadable, including scan-race + permission-denied scenarios.
 - **Follow-up**: add Pulsar parity coverage for this manifest-authoritative payload-evidence behavior and extend stress cases for transient filesystem semantics.
+
+### 2026-07-18 — Gap #10 tighten TTL boundary checks to reduce race-window acceptance
+
+- **Decision**: treat TTL equality with the configured minimum as insufficient for remote execution gating (`ttl_left <= minimum_ttl` fails closed).
+- **Why**: allowing exact-threshold TTL values leaves no scheduling or transport slack and can admit jobs that cross expiry boundary during execution startup.
+- **Security impact**: positive. Jobs now fail before remote execution when TTL sits exactly at the configured floor, reducing boundary race acceptance for both default and destination-derived minima.
+- **Follow-up**: expand integration coverage for destination-specific and Pulsar paths to validate consistent boundary enforcement outside unit-level gating.

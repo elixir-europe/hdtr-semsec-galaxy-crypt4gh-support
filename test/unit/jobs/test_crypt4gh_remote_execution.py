@@ -611,6 +611,40 @@ def test_should_run_rejects_out_of_range_destination_walltime_and_falls_back_to_
         )
 
 
+def test_should_run_rejects_exact_default_ttl_boundary_to_avoid_race_window():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-02T00:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_remote_execution_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
+def test_should_run_rejects_exact_destination_derived_ttl_boundary_to_avoid_race_window():
+    dataset = _Dataset(
+        _DatasetMetadata(
+            crypt4gh_header="header",
+            expiration="2026-06-02T03:00:00+00:00",
+        )
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="minimum TTL requirement before remote call"):
+        should_run_crypt4gh_remote_execution(
+            job_io=_JobIO([dataset]),
+            app_config=_Config(enable_crypt4gh_remote_execution_staging=True),
+            destination_params={"tool_evaluation_strategy": "remote", "walltime": "26:00:00"},
+            now=datetime.fromisoformat("2026-06-01T00:00:00+00:00"),
+        )
+
+
 def test_build_environment_uses_job_destination_walltime_before_any_recrypt_call(monkeypatch):
     dataset = _BuildDataset(
         dataset_id=1,

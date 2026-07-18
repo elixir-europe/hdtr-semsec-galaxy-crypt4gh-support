@@ -2365,7 +2365,7 @@ def _assert_minimum_ttl(*, datasets: Sequence[DatasetInstance], minimum_ttl: tim
 
         expires_at = _parse_expiration(expires_raw)
         ttl_left = expires_at - now
-        if ttl_left < minimum_ttl:
+        if ttl_left <= minimum_ttl:
             raise Crypt4GHRemoteExecutionError(
                 "Crypt4GH compute key violates minimum TTL requirement before remote call"
             )
