@@ -52,12 +52,14 @@ class _Config:
         outputs_to_working_directory=True,
         metadata_strategy="extended",
         crypt4gh_reencryption_service_url="http://127.0.0.1:9999",
+        tool_evaluation_strategy="remote",
     ):
         self.enable_crypt4gh_remote_execution_staging = enable_crypt4gh_remote_execution_staging
         self.enable_crypt4gh_transparent_input_matching = enable_crypt4gh_transparent_input_matching
         self.outputs_to_working_directory = outputs_to_working_directory
         self.metadata_strategy = metadata_strategy
         self.crypt4gh_reencryption_service_url = crypt4gh_reencryption_service_url
+        self.tool_evaluation_strategy = tool_evaluation_strategy
 
 
 class _RunnerApp:
@@ -167,6 +169,20 @@ def test_helper_setup_no_failures(crypt4gh_dataset):
         destination_params={"tool_evaluation_strategy": "remote"},
         now=datetime.fromisoformat("2026-06-01T11:00:00+00:00")
     )
+    assert result is True
+
+
+def test_helper_path_uses_global_remote_tool_evaluation_strategy_when_destination_setting_missing(crypt4gh_dataset):
+    app_config = _Config(enable_crypt4gh_remote_execution_staging=True)
+    app_config.tool_evaluation_strategy = "remote"
+
+    result = should_run_crypt4gh_remote_execution(
+        job_io=_JobIO([crypt4gh_dataset]),
+        app_config=app_config,
+        destination_params={},
+        now=datetime.fromisoformat("2026-06-01T11:00:00+00:00"),
+    )
+
     assert result is True
 
 
@@ -324,6 +340,26 @@ def test_readiness_allows_transparent_adapted_inputs_when_remote_prerequisites_a
         tool=tool,
         app_config=_Config(enable_crypt4gh_remote_execution_staging=True),
         destination_params={"tool_evaluation_strategy": "remote"},
+        metadata_strategy="extended",
+        reencryption_service_url="http://127.0.0.1:9999",
+    )
+
+
+def test_readiness_uses_global_remote_strategy_when_destination_setting_missing_for_transparent_inputs():
+    crypt4gh_dataset = _Dataset(
+        _DatasetMetadata(crypt4gh_header="header", expiration="2026-06-02T12:00:00+00:00"),
+        ext="fastqsanger.c4gh",
+    )
+    input_association = _InputDatasetAssociation(name="input_data", dataset=crypt4gh_dataset)
+    tool = _ReadinessTool(inputs={"input_data": _ReadinessToolInput(["fastqsanger"])})
+    app_config = _Config(enable_crypt4gh_remote_execution_staging=True)
+    app_config.tool_evaluation_strategy = "remote"
+
+    assert_crypt4gh_job_readiness(
+        job_io=_ReadinessJobIO([input_association]),
+        tool=tool,
+        app_config=app_config,
+        destination_params={},
         metadata_strategy="extended",
         reencryption_service_url="http://127.0.0.1:9999",
     )

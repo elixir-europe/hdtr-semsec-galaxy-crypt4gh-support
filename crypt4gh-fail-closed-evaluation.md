@@ -39,13 +39,14 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 1) Local vs remote evaluation
 
 - **Gap**: Crypt4GH finalization/cleanup orchestration is tied to remote tool-evaluation flow; local destinations can skip equivalent finalization safeguards.
-- **Mitigated?**: **Yes (for Crypt4GH inputs in this execution model)**. Readiness now fail-closes unless remote prerequisites are met, including `tool_evaluation_strategy=remote`, `metadata_strategy=extended`, remote staging + transparent matching, `outputs_to_working_directory=true`, and reencryption URL.
+- **Mitigated?**: **Yes (for Crypt4GH inputs in this execution model)**. Readiness now fail-closes unless remote prerequisites are met, including effective `tool_evaluation_strategy=remote` (destination override or global default), `metadata_strategy=extended`, remote staging + transparent matching, `outputs_to_working_directory=true`, and reencryption URL.
 - **Validation added**:
   - readiness-unit coverage for remote prerequisite combinations,
   - integration coverage asserting local strategy is rejected for transparent-adapted Crypt4GH inputs,
-  - readiness-unit coverage asserting local strategy is rejected for explicit `.c4gh` tool inputs and non-transparent Crypt4GH input handling.
+  - readiness-unit coverage asserting local strategy is rejected for explicit `.c4gh` tool inputs and non-transparent Crypt4GH input handling,
+  - readiness/helper coverage asserting effective global `tool_evaluation_strategy=remote` parity when destination params omit the strategy key.
 - **Still needed**:
-  - broader parity/performance testing for additional destination edge combinations where appropriate.
+  - broader integration/performance parity checks for additional destination edge combinations where appropriate.
 - **Priority / severity**: **Reduced (Low-Medium, mostly parity/coverage-related)**.
 
 ## 2) Marker-dir timing / race conditions
@@ -335,3 +336,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: output and marker files can be concurrently removed by external runtime events between existence checks and unlink calls; diagnostics should classify these as race conditions rather than generic purge failures.
 - **Security impact**: positive. Cleanup remains fail-closed while diagnostics become consistent across core purge targets (payload/marker/manifest), improving incident triage clarity.
 - **Follow-up**: add extra-files directory race-path assertions and stress-oriented variants to complete concurrent-mutation coverage breadth.
+
+### 2026-07-18 — Gap #1 align effective local-vs-remote strategy parity for missing destination overrides
+
+- **Decision**: use effective strategy resolution (`destination_params.tool_evaluation_strategy` with global-config fallback) in Crypt4GH helper-path and readiness gating.
+- **Why**: destination-level strategy keys may be absent in some execution contexts even when global remote evaluation is configured; enforcing only destination-scoped strategy creates false local-vs-remote mismatches and non-parity behavior.
+- **Security impact**: positive. Fail-closed semantics are preserved for non-remote effective strategy while reducing false-negative readiness/helper rejections when effective global remote strategy is active.
+- **Follow-up**: expand integration destination-matrix coverage to include additional execution contexts where destination strategy propagation may differ.

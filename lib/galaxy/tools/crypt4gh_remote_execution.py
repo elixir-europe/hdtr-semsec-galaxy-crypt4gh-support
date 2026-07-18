@@ -214,6 +214,7 @@ class _Crypt4GHAppConfig(Protocol):
     outputs_to_working_directory: bool
     metadata_strategy: str
     crypt4gh_reencryption_service_url: Optional[str]
+    tool_evaluation_strategy: Optional[str]
 
 
 class Crypt4GHRemoteExecutionError(Exception):
@@ -524,7 +525,7 @@ def should_run_crypt4gh_remote_execution(
     if not bool(getattr(app_config, "enable_crypt4gh_remote_execution_staging", False)):
         return False
 
-    if destination_params.get("tool_evaluation_strategy") != "remote":
+    if _effective_tool_evaluation_strategy(destination_params=destination_params, app_config=app_config) != "remote":
         return False
 
     crypt4gh_inputs = _collect_crypt4gh_inputs(job_io)
@@ -593,7 +594,7 @@ def assert_crypt4gh_job_readiness(
             + _missing_remote_settings_summary()
         )
 
-    if destination_params.get("tool_evaluation_strategy") != "remote":
+    if _effective_tool_evaluation_strategy(destination_params=destination_params, app_config=app_config) != "remote":
         raise Crypt4GHRemoteExecutionError(
             "Crypt4GH input handling requires tool_evaluation_strategy = remote"
             + _missing_remote_settings_summary()
@@ -649,6 +650,20 @@ def _collect_crypt4gh_input_names(*, job_io: JobIO) -> list[str]:
         crypt4gh_input_names.append(input_name)
 
     return crypt4gh_input_names
+
+
+def _effective_tool_evaluation_strategy(
+    *, destination_params: Mapping[str, Any], app_config: _Crypt4GHAppConfig
+) -> str:
+    destination_strategy = destination_params.get("tool_evaluation_strategy")
+    if isinstance(destination_strategy, str) and destination_strategy:
+        return destination_strategy
+
+    global_strategy = getattr(app_config, "tool_evaluation_strategy", None)
+    if isinstance(global_strategy, str) and global_strategy:
+        return global_strategy
+
+    return ""
 
 
 def _collect_transparent_adapted_crypt4gh_input_names(*, job_io: JobIO, tool: Optional[Any]) -> list[str]:
