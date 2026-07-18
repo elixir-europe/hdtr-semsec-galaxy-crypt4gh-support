@@ -2087,7 +2087,7 @@ def test_discovered_crypt4gh_metadata_path_clears_compute_keypair_without_generi
 
     monkeypatch.setattr(
         "galaxy.model.store.discover._resolve_discovered_crypt4gh_extension",
-        lambda *, ext, job_working_directory: "tabular.c4gh",
+        lambda *, ext, job_working_directory, require_crypt4gh_extension=False: "tabular.c4gh",
     )
 
     ModelPersistenceContext.set_datasets_metadata([primary_data], [dataset_attributes])

@@ -361,6 +361,52 @@ def test_resolve_discovered_extension_requires_crypt4gh_without_marker_dir(monke
     assert registry.created_from == ["tabular"]
 
 
+def test_set_datasets_metadata_can_require_crypt4gh_extension_resolution(monkeypatch):
+    class _PrimaryData:
+        states = type("States", (), {"OK": "ok", "FAILED_METADATA": "failed_metadata"})
+
+        def __init__(self):
+            self.extension = "tabular"
+            self.name = "sample"
+            self.info = ""
+            self.dbkey = "?"
+            self.job_working_directory = "/tmp/jobdir"
+            self.state = "ok"
+            self.metadata = SimpleNamespace(from_JSON_dict=lambda json_dict: None)
+
+        def set_meta(self):
+            return None
+
+        def set_peek(self):
+            return None
+
+        def set_total_size(self):
+            return None
+
+    observed_require_flags = []
+
+    def _fake_resolve_discovered_crypt4gh_extension(*, ext, job_working_directory, require_crypt4gh_extension=False):
+        del ext
+        del job_working_directory
+        observed_require_flags.append(require_crypt4gh_extension)
+        return "tabular.c4gh" if require_crypt4gh_extension else "tabular"
+
+    monkeypatch.setattr(
+        "galaxy.model.store.discover._resolve_discovered_crypt4gh_extension",
+        _fake_resolve_discovered_crypt4gh_extension,
+    )
+
+    primary_data = _PrimaryData()
+    ModelPersistenceContext.set_datasets_metadata(
+        [primary_data],
+        [{"ext": "tabular"}],
+        require_crypt4gh_extension=True,
+    )
+
+    assert primary_data.extension == "tabular.c4gh"
+    assert observed_require_flags == [True]
+
+
 class _FakeObjectStore:
     def __init__(self):
         self.update_calls = []

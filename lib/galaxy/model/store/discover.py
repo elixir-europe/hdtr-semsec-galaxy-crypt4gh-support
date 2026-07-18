@@ -303,13 +303,17 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             self.permission_provider.set_default_hda_permissions(primary_data)
 
         # TODO: this might run set_meta after copying the file to the object store, which could be inefficient if job working directory is closer to the node.
-        self.set_datasets_metadata(datasets=[primary_data], datasets_attributes=[effective_dataset_attributes])
+        self.set_datasets_metadata(
+            datasets=[primary_data],
+            datasets_attributes=[effective_dataset_attributes],
+            require_crypt4gh_extension=bool(self.crypt4gh_output_finalization_context()),
+        )
 
     def crypt4gh_output_finalization_context(self) -> Optional[dict[str, str]]:
         return None
 
     @staticmethod
-    def set_datasets_metadata(datasets, datasets_attributes=None):
+    def set_datasets_metadata(datasets, datasets_attributes=None, require_crypt4gh_extension: bool = False):
         datasets_attributes = datasets_attributes or [{} for _ in datasets]
         for primary_data, dataset_attributes in zip(datasets, datasets_attributes):
             # add tool/metadata provided information
@@ -325,6 +329,7 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
                         attribute_value = _resolve_discovered_crypt4gh_extension(
                             ext=str(attribute_value),
                             job_working_directory=getattr(primary_data, "job_working_directory", "."),
+                            require_crypt4gh_extension=require_crypt4gh_extension,
                         )
                     setattr(
                         primary_data,
@@ -512,7 +517,10 @@ class ModelPersistenceContext(metaclass=abc.ABCMeta):
             name,
             add_datasets_timer,
         )
-        self.set_datasets_metadata(datasets=element_datasets["datasets"])
+        self.set_datasets_metadata(
+            datasets=element_datasets["datasets"],
+            require_crypt4gh_extension=bool(self.crypt4gh_output_finalization_context()),
+        )
 
     def add_tags_to_datasets(self, datasets, tag_lists):
         if any(tag_lists):

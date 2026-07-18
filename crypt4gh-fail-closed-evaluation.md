@@ -120,11 +120,18 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 9) Discovery callers not consistently using `require_crypt4gh_extension`
 
 - **Gap**: Some paths can call module-level extension resolution in ways that bypass context-enforced requirement semantics.
-- **Mitigated?**: **Partially (improved)**. Key discovered-output hooks are now aligned to working-dir-only finalization semantics and context-driven extension enforcement.
-- **Still needed**:
-  - audit and align all discovery/ext resolution entry points,
-  - avoid direct calls that bypass context-aware enforcement.
-- **Priority / severity**: **Medium**.
+- **Mitigated?**: **Yes (for current discovery metadata and collection entry points)**.
+- **Mitigation implemented**:
+  - `ModelPersistenceContext.set_datasets_metadata(...)` now accepts and forwards `require_crypt4gh_extension` into `_resolve_discovered_crypt4gh_extension(...)` for discovered metadata paths.
+  - Discovery callsites now pass context-derived enforcement consistently:
+    - `ModelPersistenceContext.create_dataset(...)` passes `require_crypt4gh_extension=bool(self.crypt4gh_output_finalization_context())`
+    - `ModelPersistenceContext._populate_elements(...)` passes the same flag for collection/discovery metadata assignment.
+  - Added regression coverage to prevent extension-resolution bypass in metadata path:
+    - `test_set_datasets_metadata_can_require_crypt4gh_extension_resolution`
+  - Updated existing monkeypatch signature coverage in `test_discovered_crypt4gh_metadata_path_clears_compute_keypair_without_generic_set_meta` to keep direct-call regression aligned with the new parameter contract.
+- **Residual risk / follow-up**:
+  - continue auditing any newly introduced extension-resolution callers to ensure context-enforced semantics remain the default and no module-level bypasses are reintroduced.
+- **Priority / severity**: **Reduced (Low-Medium; caller-audit follow-up)**.
 
 ## 10) Incomplete edge-case test coverage
 
@@ -268,3 +275,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: deriving fallback roots from target-path strings alone is weaker provenance and can obscure caller intent. Requiring explicit roots forces the caller to bind finalization to a known safe scope.
 - **Security impact**: positive. Finalization now refuses ambiguous/no-provenance invocations before any encrypt/rewrite/purge side effects begin.
 - **Follow-up**: maintain caller-audit tests for any new finalize-about-to-persist entry points to prevent regressions to implicit root derivation.
+
+### 2026-07-18 — Gap #9 enforce context-driven extension resolution in discovery metadata paths
+
+- **Decision**: plumb `require_crypt4gh_extension` through `ModelPersistenceContext.set_datasets_metadata(...)` and all current discovery callers in that path.
+- **Why**: metadata-setting entry points could otherwise call `_resolve_discovered_crypt4gh_extension(...)` without context-enforced requirement semantics, allowing extension resolution behavior to drift from active Crypt4GH finalization context.
+- **Security impact**: positive. Discovery metadata and collection paths now consistently honor Crypt4GH-context extension enforcement, reducing risk of unencrypted extension assignment drift.
+- **Follow-up**: keep caller-audit regression coverage for new discovery/metadata entry points that invoke extension resolution.
