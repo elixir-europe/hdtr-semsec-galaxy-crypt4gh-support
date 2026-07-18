@@ -52,11 +52,15 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 2) Marker-dir timing / race conditions
 
 - **Gap**: Marker presence can lag discovery-time extension resolution; race windows can misclassify ext if marker-only heuristics are used.
-- **Mitigated?**: **Partially**. `require_crypt4gh_extension` reduces this risk when finalization context exists.
-- **Still needed**:
-  - ensure all relevant callers use context-driven `require_crypt4gh_extension`,
-  - reduce dependence on marker-dir existence as sole signal in mixed call paths.
-- **Priority / severity**: **Medium-High**.
+- **Mitigated?**: **Yes (for current discovery/finalization call paths)**.
+- **Mitigation implemented**:
+  - `_resolve_discovered_crypt4gh_extension(...)` now short-circuits already-encrypted extensions before marker checks.
+  - marker presence alone is no longer treated as sufficient evidence for implicit extension upgrades in non-required paths; evidence now requires marker files (`discovered_designations.json`, `path_*.encrypted`, or `ds_*.encrypted`).
+  - marker-directory list races (`FileNotFoundError`/`OSError` between `isdir` and `listdir`) are treated as no marker evidence, while context-required paths still force `.c4gh` extension resolution through `require_crypt4gh_extension=True`.
+  - added regression coverage for empty marker directories, `ds_*.encrypted` marker evidence, and list-race behavior in both required and non-required contexts.
+- **Residual risk / follow-up**:
+  - extend integration coverage to include more end-to-end discovery/finalize race simulations under concurrent cleanup pressure.
+- **Priority / severity**: **Reduced (Low-Medium; mostly broader integration hardening)**.
 
 ## 3) Purge path safety (containment)
 
@@ -158,11 +162,15 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 11) Dynamic datatype registration warning for non-preregistered `*.c4gh` variants
 
 - **Gap**: Datasets whose base datatype lacks a preregistered `.c4gh` variant (example: `txt.c4gh`) may encrypt successfully but emit registration/runtime warning sequences, including `SafeStringWrapper__...NoneDataset... type() doesn't support MRO entry resolution`.
-- **Mitigated?**: **Not yet**.
-- **Still needed**:
-  - isolate root cause between dynamic datatype creation and wrapper/subclass handling,
-  - add targeted regression tests for non-preregistered datatype families.
-- **Priority / severity**: **Medium-High**.
+- **Mitigated?**: **Yes (for current runtime wrapper and warning path)**.
+- **Mitigation implemented**:
+  - `wrap_with_safe_string(...)` now derives wrapper-module naming from the resolved wrapped class (`inspect.getmodule(wrapped_class)`) instead of the wrapped instance value.
+  - this avoids constructing malformed dynamic wrapper bases for `NoneDataset`-like values in the non-preregistered `*.c4gh` flow and removes the warning path (`type() doesn't support MRO entry resolution`) while preserving successful wrapping behavior.
+  - added regression coverage:
+    - `test_wrap_with_safe_string_does_not_warn_for_nonedataset_and_preserves_wrapper_type`
+- **Residual risk / follow-up**:
+  - broaden coverage for additional wrapper edge cases where sanitized wrappers compose with dynamically registered runtime datatypes.
+- **Priority / severity**: **Reduced (Low-Medium; broader wrapper-edge coverage follow-up)**.
 
 ## 12) Metadata reset gap for “modify input dataset” style tools
 
@@ -197,10 +205,16 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 14) `CRYPT4GH_DEBUG` output still enabled
 
 - **Gap**: `CRYPT4GH_DEBUG` diagnostic prints are still emitted.
-- **Mitigated?**: **Intentionally deferred** (still useful for current debugging).
-- **Still needed**:
-  - remove or gate debug output behind a dedicated opt-in debug flag before merge/release.
-- **Priority / severity**: **Low (operational hygiene)**.
+- **Mitigated?**: **Yes (gated)**.
+- **Mitigation implemented**:
+  - `_print_declared_output_target_debug(...)` now emits debug payloads only when `GALAXY_CRYPT4GH_DEBUG=1`.
+  - default path no longer emits `CRYPT4GH_DEBUG` lines.
+  - added regression coverage for both default-off and opt-in debug behavior:
+    - `test_collect_declared_targets_does_not_emit_debug_resolution_payload_by_default`
+    - `test_collect_declared_targets_emits_debug_resolution_payload_when_opted_in`
+- **Residual risk / follow-up**:
+  - if additional `CRYPT4GH_DEBUG` surfaces are introduced later, enforce the same env-gated opt-in policy.
+- **Priority / severity**: **Reduced (Low; policy now explicit and test-enforced)**.
 
 ---
 
@@ -209,7 +223,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 Overall posture is **materially improved but not yet complete fail-closed across all execution modes**.
 
 - **Strongest coverage**: remote evaluation path, declared/discovered output finalization hooks (working-dir-first), pre-success verifier, cleanup wrapping, marker/mapping evidence checks.
-- **Residual risk concentration**: Pulsar parity, untracked output locations, metadata-reset consistency, and unresolved discovery subpaths.
+- **Residual risk concentration**: Pulsar parity, untracked output locations, metadata-reset consistency, and remaining coverage breadth.
 
 ---
 
@@ -261,7 +275,7 @@ This order prioritizes highest fail-closed risk first, defers likely policy/thre
 
 ## Bottom line
 
-The Crypt4GH fail-closed posture is **substantially stronger** after recent hardening, including working-dir-only discovered-output finalization and stricter readiness prerequisites. Remaining work is concentrated in **Gap #4 plus unresolved gaps #2/#5/#6/#8/#10/#11/#12/#14**, where correctness and complete fail-closed coverage must still be proven across all discovery and metadata edge paths.
+The Crypt4GH fail-closed posture is **substantially stronger** after recent hardening, including working-dir-only discovered-output finalization and stricter readiness prerequisites. Remaining work is concentrated in **Gap #4 plus unresolved gaps #5/#6/#8/#10/#11/#12/#14**, where correctness and complete fail-closed coverage must still be proven across all discovery and metadata edge paths.
 
 ---
 
@@ -357,3 +371,24 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: short declared walltime values (for example 10–15 minutes) could otherwise reduce a 24-hour default TTL floor and permit near-expiry keys that contradict conservative fail-closed policy.
 - **Security impact**: positive. TTL gate remains conservative under short walltime declarations while still scaling upward for long walltime jobs.
 - **Follow-up**: add integration coverage around destination-specific walltime propagation and end-to-end expiry windows.
+
+### 2026-07-18 — Gap #2 harden marker-evidence semantics and marker-directory race handling
+
+- **Decision**: make marker evidence explicit and race-tolerant in discovery extension resolution, and rely on context-required enforcement for fail-closed finalization paths.
+- **Why**: marker-directory existence alone is timing-sensitive and can produce false extension upgrades in mixed call paths; concurrent cleanup can also remove marker directories between existence and listing checks.
+- **Security impact**: positive. Non-required discovery paths no longer upgrade extensions based on marker-dir presence alone, while required Crypt4GH contexts still force encrypted extension assignment even when marker evidence races.
+- **Follow-up**: add broader integration race simulations around discovery and finalization boundaries under concurrent cleanup stress.
+
+### 2026-07-18 — Gap #11 eliminate dynamic wrapper warning path for non-preregistered `*.c4gh` variants
+
+- **Decision**: keep dynamic runtime datatype registration allowed (no new fail-closed hard stop) and remove warning-path instability in safe-string wrapping.
+- **Why**: non-preregistered encrypted extensions should continue to function for fail-closed encryption semantics; warning spam from wrapper-class construction obscured signal quality without improving safety.
+- **Security impact**: positive. Encryption behavior remains intact while runtime warning noise tied to `NoneDataset` wrapper composition is removed, improving operator signal fidelity.
+- **Follow-up**: extend wrapper/datatype composition tests across more dynamic-extension families.
+
+### 2026-07-18 — Gap #14 gate `CRYPT4GH_DEBUG` output behind explicit opt-in
+
+- **Decision**: gate declared-output debug prints behind `GALAXY_CRYPT4GH_DEBUG=1` and keep default execution free of `CRYPT4GH_DEBUG` stdout lines.
+- **Why**: always-on debug prints are operational noise and should not leak into normal runtime output; developers still need an explicit troubleshooting switch.
+- **Security impact**: positive. Reduces accidental sensitive-context exposure in routine logs/stdout while preserving controlled diagnostics when explicitly enabled.
+- **Follow-up**: apply the same opt-in gate to any future `CRYPT4GH_DEBUG` diagnostic surfaces.
