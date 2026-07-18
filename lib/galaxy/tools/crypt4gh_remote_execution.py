@@ -1727,6 +1727,11 @@ def verify_crypt4gh_pre_success_output_evidence(
     diagnostics: list[str] = []
     for dataset_id in sorted(dataset_candidates):
         candidate = dataset_candidates[dataset_id]
+        _verify_payload_header_evidence(
+            dataset_id=dataset_id,
+            dataset=candidate.get("dataset"),
+            diagnostics=diagnostics,
+        )
         if bool(candidate.get("require_payload_marker", False)):
             _verify_payload_marker_evidence(marker_dirs=marker_dirs, dataset_id=dataset_id, diagnostics=diagnostics)
         _verify_extra_files_manifest_evidence(
@@ -1824,6 +1829,27 @@ def _verify_payload_marker_evidence(*, marker_dirs: Sequence[Path], dataset_id: 
         diagnostics.append(f"payload marker invalid for dataset_id={dataset_id}")
     elif saw_unreadable_marker:
         diagnostics.append(f"payload marker unreadable for dataset_id={dataset_id}")
+
+
+def _verify_payload_header_evidence(*, dataset_id: int, dataset: Any, diagnostics: list[str]) -> None:
+    dataset_path = _dataset_payload_path(dataset)
+    if not dataset_path:
+        return
+
+    payload_path = Path(dataset_path)
+    if not payload_path.exists():
+        diagnostics.append(f"payload path missing for dataset_id={dataset_id}")
+        return
+
+    try:
+        with payload_path.open("rb") as payload_stream:
+            payload_prefix = payload_stream.read(8)
+    except Exception:
+        diagnostics.append(f"payload unreadable for dataset_id={dataset_id}")
+        return
+
+    if payload_prefix != b"crypt4gh":
+        diagnostics.append(f"payload remained plaintext for dataset_id={dataset_id}")
 
 
 def _verify_discovered_mapping_evidence(

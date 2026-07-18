@@ -100,10 +100,10 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 6) Output written outside job working directory
 
 - **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
-- **Mitigated?**: **Partially**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path and discovered hooks now finalize from working-dir paths only.
+- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path and discovered hooks now finalize from working-dir paths only; pre-success evidence now also validates payload header bytes for tracked output datasets.
 - **Still needed**:
   - stronger constraints on writable paths for Crypt4GH jobs,
-  - verification that unexpected plaintext artifacts are detected/fail the job before success.
+  - broader discovery/integration checks for unexpected out-of-tree plaintext artifacts beyond tracked output datasets.
 - **Priority / severity**: **High**.
 
 ## 7) Path construction validation for finalize-about-to-persist
@@ -343,3 +343,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: destination-level strategy keys may be absent in some execution contexts even when global remote evaluation is configured; enforcing only destination-scoped strategy creates false local-vs-remote mismatches and non-parity behavior.
 - **Security impact**: positive. Fail-closed semantics are preserved for non-remote effective strategy while reducing false-negative readiness/helper rejections when effective global remote strategy is active.
 - **Follow-up**: expand integration destination-matrix coverage to include additional execution contexts where destination strategy propagation may differ.
+
+### 2026-07-18 — Gap #6 add pre-success plaintext payload detection for tracked outputs
+
+- **Decision**: extend pre-success evidence verification to assert Crypt4GH header bytes on tracked output dataset payloads, not only marker/map evidence.
+- **Why**: marker/mapping evidence alone can be stale or inconsistent with actual payload bytes; tracked outputs should fail closed if bytes remain plaintext at success boundary.
+- **Security impact**: positive. Jobs now fail before success when tracked output payloads are not Crypt4GH-encrypted, including discovered outputs with valid mapping but plaintext bytes.
+- **Follow-up**: expand integration coverage for out-of-tree plaintext artifact detection and non-tracked path policy enforcement.

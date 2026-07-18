@@ -1852,6 +1852,38 @@ def test_pre_success_verifier_fails_for_missing_payload_marker(tmp_path):
         )
 
 
+def test_pre_success_verifier_fails_when_marker_exists_but_payload_is_plaintext(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_32.encrypted").write_text("tabular.c4gh\n")
+
+    dataset_path = tmp_path / "objects" / "dataset_32.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"PLAINTEXT")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="payload remained plaintext"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(32, str(dataset_path))),
+            ],
+        )
+
+
 def test_pre_success_verifier_fails_for_missing_discovered_mapping(tmp_path):
     marker_dir = tmp_path / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)
@@ -1946,6 +1978,38 @@ def test_pre_success_verifier_allows_discovered_outputs_without_dataset_marker_w
             _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(61, str(dataset_path))),
         ],
     )
+
+
+def test_pre_success_verifier_fails_for_plaintext_discovered_payload_even_when_mapping_present(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "discovered_designations.json").write_text(json.dumps({"sample1": "txt.c4gh"}))
+
+    dataset_path = tmp_path / "objects" / "dataset_62.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"PLAINTEXT")
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="payload remained plaintext"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("__new_primary_file_output|sample1__", _DatasetObject(62, str(dataset_path))),
+            ],
+        )
 
 
 def test_pre_success_verifier_fails_for_missing_extra_files_manifest(tmp_path):
