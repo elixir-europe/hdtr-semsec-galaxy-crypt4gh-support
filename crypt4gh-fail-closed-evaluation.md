@@ -147,9 +147,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, and concurrent-mutation diagnostics assertions for manifest cleanup races.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, and concurrent-mutation diagnostics assertions for output payload, marker, and manifest cleanup races.
 - **Still needed**:
-  - add broader concurrent-mutation cleanup stress tests beyond manifest-path race handling,
+  - add broader concurrent-mutation cleanup stress tests for extra-files directory race patterns,
   - add Pulsar branch parity tests,
   - add additional TTL boundary and race-window scenarios.
 - **Priority / severity**: **High**.
@@ -328,3 +328,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: cleanup races can remove manifest files between existence-check and unlink; this is an expected best-effort race condition and should emit explicit, non-ambiguous diagnostics distinct from general cleanup failures.
 - **Security impact**: positive. Fail-closed behavior is preserved while operator diagnostics now distinguish race-driven manifest cleanup events from generic purge failures.
 - **Follow-up**: extend concurrent-mutation assertions to additional purge targets (output payloads, markers, extra-files directories) and add stress-oriented coverage where feasible.
+
+### 2026-07-18 — Gap #10 extend concurrent-mutation diagnostics assertions to output payload and marker purge targets
+
+- **Decision**: treat `FileNotFoundError` during output-payload and encrypted-marker purge as explicit concurrent-mutation warnings, aligned with the manifest race policy.
+- **Why**: output and marker files can be concurrently removed by external runtime events between existence checks and unlink calls; diagnostics should classify these as race conditions rather than generic purge failures.
+- **Security impact**: positive. Cleanup remains fail-closed while diagnostics become consistent across core purge targets (payload/marker/manifest), improving incident triage clarity.
+- **Follow-up**: add extra-files directory race-path assertions and stress-oriented variants to complete concurrent-mutation coverage breadth.

@@ -1263,6 +1263,13 @@ def _purge_output_targets_after_finalization_failure(
                 )
                 if candidate_path.exists():
                     candidate_path.unlink()
+            except FileNotFoundError as exc:
+                log.warning(
+                    "Observed concurrent mutation while removing plaintext output candidate %s after Crypt4GH finalization failure (%s: %s)",
+                    candidate_path,
+                    exc.__class__.__name__,
+                    exc,
+                )
             except Exception as exc:
                 log.exception(
                     "Failed to remove plaintext output candidate %s after Crypt4GH finalization failure (%s: %s)",
@@ -1282,6 +1289,13 @@ def _purge_output_targets_after_finalization_failure(
                 )
                 if marker_path.exists():
                     marker_path.unlink()
+            except FileNotFoundError as exc:
+                log.warning(
+                    "Observed concurrent mutation while removing encrypted marker %s after Crypt4GH finalization failure (%s: %s)",
+                    marker_path,
+                    exc.__class__.__name__,
+                    exc,
+                )
             except Exception as exc:
                 log.exception(
                     "Failed to remove encrypted marker %s after Crypt4GH finalization failure (%s: %s)",

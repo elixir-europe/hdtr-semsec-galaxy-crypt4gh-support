@@ -2379,6 +2379,160 @@ def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_mani
     )
 
 
+def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_output_payload_purge_race(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    output_path = tmp_path / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    marker_path = tmp_path / "_c4gh_stage" / "outputs" / "ds_1.encrypted"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        Path(compute_encrypted_path).write_bytes(Path(plaintext_path).read_bytes())
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    def _fail_extra_files_finalize(**kwargs):
+        del kwargs
+        raise RuntimeError("simulated extra-files finalize race")
+
+    original_unlink = Path.unlink
+
+    def _race_unlink(self, *args, **kwargs):
+        if self == output_path:
+            if self.exists():
+                original_unlink(self, *args, **kwargs)
+            raise FileNotFoundError("simulated concurrent output payload removal")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._finalize_extra_files_payloads",
+        _fail_extra_files_finalize,
+    )
+    monkeypatch.setattr(Path, "unlink", _race_unlink)
+
+    caplog.set_level("WARNING", logger="galaxy.tools.crypt4gh_remote_execution")
+    with pytest.raises(RuntimeError, match="simulated extra-files finalize race"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(marker_path),
+                    "encrypted_ext": "tabular.c4gh",
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert any(
+        "concurrent mutation" in record.getMessage().lower()
+        and "FileNotFoundError" in record.getMessage()
+        and str(output_path) in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_marker_purge_race(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    output_path = tmp_path / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    marker_path = tmp_path / "_c4gh_stage" / "outputs" / "ds_1.encrypted"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        Path(compute_encrypted_path).write_bytes(Path(plaintext_path).read_bytes())
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    def _fail_extra_files_finalize(**kwargs):
+        del kwargs
+        raise RuntimeError("simulated extra-files finalize race")
+
+    original_unlink = Path.unlink
+
+    def _race_unlink(self, *args, **kwargs):
+        if self == marker_path:
+            if self.exists():
+                original_unlink(self, *args, **kwargs)
+            raise FileNotFoundError("simulated concurrent marker removal")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._finalize_extra_files_payloads",
+        _fail_extra_files_finalize,
+    )
+    monkeypatch.setattr(Path, "unlink", _race_unlink)
+
+    caplog.set_level("WARNING", logger="galaxy.tools.crypt4gh_remote_execution")
+    with pytest.raises(RuntimeError, match="simulated extra-files finalize race"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "plaintext_path": str(tmp_path / "plaintext"),
+                    "encrypted_marker_path": str(marker_path),
+                    "encrypted_ext": "tabular.c4gh",
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+    assert any(
+        "concurrent mutation" in record.getMessage().lower()
+        and "FileNotFoundError" in record.getMessage()
+        and str(marker_path) in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_finalize_declared_outputs_deletes_unprocessed_plaintext_outputs_when_any_target_fails(tmp_path, monkeypatch):
     first_output_path = tmp_path / "working" / "1"
     first_output_path.parent.mkdir(parents=True, exist_ok=True)
