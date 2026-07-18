@@ -2227,6 +2227,49 @@ def test_pre_success_verifier_fails_for_plaintext_extra_files_payload_even_when_
         )
 
 
+def test_pre_success_verifier_fails_for_symlinked_extra_files_payload_even_when_manifest_entries_exist(tmp_path):
+    marker_dir = tmp_path / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "ds_53.encrypted").write_text("tabular.c4gh\n")
+    (marker_dir / "ds_53.extra_files_manifest.json").write_text(
+        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+    )
+
+    dataset_path = tmp_path / "objects" / "dataset_53.dat"
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_path.write_bytes(b"crypt4ghpayload")
+
+    outside_payload_path = tmp_path / "outside" / "foo.txt"
+    outside_payload_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_payload_path.write_bytes(b"crypt4ghoutside")
+
+    extra_files_path = tmp_path / "objects" / "dataset_53_files"
+    extra_files_path.mkdir(parents=True, exist_ok=True)
+    (extra_files_path / "foo.txt").symlink_to(outside_payload_path)
+
+    class _DatasetObject:
+        def __init__(self, dataset_id: int, file_name: str):
+            self.id = dataset_id
+            self._file_name = file_name
+
+        def get_file_name(self, sync_cache=False):
+            del sync_cache
+            return self._file_name
+
+    class _DatasetAssociation:
+        def __init__(self, name: str, dataset_object):
+            self.name = name
+            self.dataset = type("_DatasetInstance", (), {"dataset": dataset_object})
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="extra_files payload symlink"):
+        crypt4gh_remote_execution.verify_crypt4gh_pre_success_output_evidence(
+            working_directory=str(tmp_path),
+            output_dataset_associations=[
+                _DatasetAssociation("direct_output", _DatasetObject(53, str(dataset_path))),
+            ],
+        )
+
+
 def test_pre_success_verifier_fails_for_missing_extra_files_manifest_for_discovered_output(tmp_path):
     marker_dir = tmp_path / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)

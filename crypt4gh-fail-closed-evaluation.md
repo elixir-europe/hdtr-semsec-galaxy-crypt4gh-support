@@ -423,3 +423,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: manifest structure/entries alone can be stale or forged relative to on-disk payload bytes; without payload-byte checks, plaintext extra-files content can evade pre-success failure despite valid manifest metadata.
 - **Security impact**: positive. Jobs now fail before success when any expected extra-files payload remains plaintext, even if marker+manifest evidence appears complete.
 - **Follow-up**: add additional coverage for unreadable/missing extra-files payload diagnostics under concurrent mutation and permission-denied conditions.
+
+### 2026-07-18 — Gap #10 fail closed on symlinked extra-files payload evidence
+
+- **Decision**: treat symlinked expected extra-files payload paths as invalid pre-success evidence and fail closed even when manifest entries are complete.
+- **Why**: reading header bytes through symlinks permits path indirection outside intended payload provenance; a symlink can satisfy marker/manifest shape while pointing at uncontrolled paths.
+- **Security impact**: positive. Jobs now fail before success when expected extra-files payload entries resolve as symlinks, tightening provenance guarantees for pre-success evidence.
+- **Follow-up**: extend pre-success extra-files checks for additional link-like path forms under destination-specific filesystems and Pulsar parity paths.

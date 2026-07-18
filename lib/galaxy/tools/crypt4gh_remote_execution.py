@@ -2002,6 +2002,10 @@ def _verify_extra_files_payload_header_evidence(
 ) -> None:
     for relative_path in sorted(expected_entries):
         payload_path = extra_files_path / relative_path
+        if payload_path.is_symlink():
+            diagnostics.append(f"extra_files payload symlink for dataset_id={dataset_id} path={relative_path}")
+            continue
+
         if not payload_path.exists():
             diagnostics.append(f"extra_files payload missing for dataset_id={dataset_id} path={relative_path}")
             continue
