@@ -355,6 +355,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
     def handle_galaxy_config_kwds(cls, config: dict[str, Any]) -> None:
         super().handle_galaxy_config_kwds(config)
         config["enable_celery_tasks"] = False
+        config["outputs_to_working_directory"] = True
         config["metadata_strategy"] = "extended"
         config["enable_crypt4gh_transparent_input_matching"] = True
         config["enable_crypt4gh_remote_execution_staging"] = True
@@ -773,12 +774,17 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert job_working_directory is not None
         outputs_dir = Path(job_working_directory) / "outputs"
         output_files = sorted(path.name for path in outputs_dir.iterdir() if path.is_file())
-        assert output_files == ["tool_stderr", "tool_stdout"]
+        assert "tool_stderr" in output_files
+        assert "tool_stdout" in output_files
 
         for output_file in output_files:
             output_path = outputs_dir / output_file
             with output_path.open("rb") as output_stream:
-                assert output_stream.read(8) != b"crypt4gh"
+                file_prefix = output_stream.read(8)
+            if output_file in ("tool_stderr", "tool_stdout"):
+                assert file_prefix != b"crypt4gh"
+            else:
+                assert file_prefix == b"crypt4gh"
 
         output_dataset_path = Path(direct_output_hda.dataset.get_file_name())
         with output_dataset_path.open("rb") as output_stream:
@@ -911,6 +917,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert "tool_evaluation_strategy = remote" in failure_text
         assert "enable_crypt4gh_transparent_input_matching = true" in failure_text
         assert "enable_crypt4gh_remote_execution_staging = true" in failure_text
+        assert "outputs_to_working_directory = true" in failure_text
         assert "metadata_strategy = extended" in failure_text
         assert "crypt4gh_reencryption_service_url" in failure_text
 

@@ -49,6 +49,7 @@ def test_about_to_persist_finalization_allows_missing_dataset_id_when_designatio
     assert len(calls) == 1
     call = calls[0]
     assert call["output_path"] == str(output_path)
+    assert "dataset_output_path" not in call
     assert call["designation"] == "sample1"
     assert call["discovered_marker_map_path"].endswith("_c4gh_stage/outputs/discovered_designations.json")
     assert call["encrypted_marker_path"] == ""

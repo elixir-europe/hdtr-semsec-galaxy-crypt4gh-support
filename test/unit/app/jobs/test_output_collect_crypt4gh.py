@@ -158,5 +158,7 @@ def test_collect_primary_datasets_finalizes_assigned_primary_when_crypt4gh_conte
     assert len(calls) == 1
     call = calls[0]
     assert call["output_path"] == str(tmp_path / "sample1.report.tsv")
+    assert "dataset_output_path" not in call
+    assert call["allowed_root_paths"] == [str(tmp_path.resolve())]
     assert call["encrypted_ext"] == "tabular.c4gh"
     assert call["encrypted_marker_path"].endswith("_c4gh_stage/outputs/ds_42.encrypted")

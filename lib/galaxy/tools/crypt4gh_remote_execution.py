@@ -211,6 +211,7 @@ def _post_many_reencryption_json(
 class _Crypt4GHAppConfig(Protocol):
     enable_crypt4gh_transparent_input_matching: bool
     enable_crypt4gh_remote_execution_staging: bool
+    outputs_to_working_directory: bool
     metadata_strategy: str
     crypt4gh_reencryption_service_url: Optional[str]
 
@@ -565,6 +566,7 @@ def assert_crypt4gh_job_readiness(
         "enable_crypt4gh_transparent_input_matching = true",
         "enable_crypt4gh_remote_execution_staging = true",
         "tool_evaluation_strategy = remote",
+        "outputs_to_working_directory = true",
         "metadata_strategy = extended",
         "crypt4gh_reencryption_service_url",
     ]
@@ -594,6 +596,12 @@ def assert_crypt4gh_job_readiness(
     if destination_params.get("tool_evaluation_strategy") != "remote":
         raise Crypt4GHRemoteExecutionError(
             "Crypt4GH input handling requires tool_evaluation_strategy = remote"
+            + _missing_remote_settings_summary()
+        )
+
+    if not bool(getattr(app_config, "outputs_to_working_directory", False)):
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH input handling requires outputs_to_working_directory = true"
             + _missing_remote_settings_summary()
         )
 
@@ -898,6 +906,12 @@ def collect_declared_crypt4gh_output_targets(
             tool_output=tool_output,
             tool_working_directory=tool_working_directory,
         )
+        _assert_output_path_inside_job_working_directory(
+            output_path=output_path,
+            output_path_source=output_path_source,
+            working_directory=working_directory,
+            output_name=output_name,
+        )
         _print_declared_output_target_debug(
             output_name=output_name,
             output_name_for_tool_lookup=output_name_for_tool_lookup,
@@ -1028,6 +1042,25 @@ def _print_declared_output_target_debug(
         "working_directory": working_directory,
     }
     print(f"CRYPT4GH_DEBUG {json.dumps(debug_payload, sort_keys=True)}", flush=True)
+
+
+def _assert_output_path_inside_job_working_directory(
+    *,
+    output_path: str,
+    output_path_source: str,
+    working_directory: str,
+    output_name: str,
+) -> None:
+    resolved_working_directory = Path(working_directory).resolve(strict=False)
+    resolved_output_path = Path(output_path).resolve(strict=False)
+
+    try:
+        resolved_output_path.relative_to(resolved_working_directory)
+    except ValueError as exc:
+        raise Crypt4GHRemoteExecutionError(
+            "Crypt4GH declared output target "
+            f"'{output_name}' resolved {output_path_source} outside job working directory: {output_path}"
+        ) from exc
 
 
 def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) -> dict[str, Any]:

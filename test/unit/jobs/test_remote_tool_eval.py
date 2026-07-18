@@ -130,6 +130,58 @@ def test_finalize_command_rejects_output_targets_outside_allowed_roots(tmp_path)
     assert "outside allowed roots" in completed.stderr
 
 
+def test_finalize_command_preserves_target_specific_allowed_roots(tmp_path):
+    galaxy_lib_for_finalize = str(Path(__file__).resolve().parents[3] / "lib")
+
+    working_root = tmp_path / "job_work"
+    working_root.mkdir(parents=True, exist_ok=True)
+    object_store_root = tmp_path / "objects"
+    object_store_root.mkdir(parents=True, exist_ok=True)
+
+    output_path = working_root / "working" / "1"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("PLAINTEXT")
+
+    dataset_output_path = object_store_root / "dataset_real.dat"
+    plaintext_path = working_root / "_crypt" / "outputs" / "ds_1" / "plaintext"
+    marker_path = working_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"
+
+    metadata_params_path = tmp_path / "metadata" / "params.json"
+    metadata_params_path.parent.mkdir(parents=True)
+    metadata_params_path.write_text('{"outputs": {}}')
+
+    command = _crypt4gh_finalize_postrun_command(
+        output_targets=[
+            {
+                "association_name": "out1",
+                "output_path": str(output_path),
+                "dataset_output_path": str(dataset_output_path),
+                "plaintext_path": str(plaintext_path),
+                "encrypted_marker_path": str(marker_path),
+                "encrypted_ext": "txt.c4gh",
+                "clear_compute_keypair": True,
+                "allowed_root_paths": [
+                    str(working_root.resolve()),
+                    str(dataset_output_path.parent.resolve()),
+                ],
+            }
+        ],
+        metadata_params_path=str(metadata_params_path),
+        galaxy_lib_for_finalize=galaxy_lib_for_finalize,
+        reencryption_service_url="http://127.0.0.1:36667",
+        compute_public_key="invalid-public-key",
+        compute_keypair_id="mock-keypair",
+        compute_keypair_expiration_date="2099-01-01T00:00:00+00:00",
+        python_executable=sys.executable,
+        allowed_root_paths=[str(working_root.resolve())],
+    )
+
+    completed = subprocess.run(["/bin/bash", "-c", command], check=False, capture_output=True, text=True)
+
+    assert completed.returncode != 0
+    assert "outside allowed roots" not in completed.stderr
+
+
 def test_python_executable_for_embedded_commands_preserves_invocation_path(monkeypatch):
     invocation_path = "/tmp/mock-venv/bin/python"
     monkeypatch.setattr(sys, "executable", invocation_path)

@@ -4,6 +4,7 @@ import abc
 import logging
 import operator
 import os
+from pathlib import Path
 import re
 from collections.abc import Callable
 from tempfile import NamedTemporaryFile
@@ -527,14 +528,6 @@ def _maybe_finalize_crypt4gh_assigned_primary_output(
     if not isinstance(dataset_id, int):
         raise RuntimeError("Crypt4GH assigned primary output is missing a persisted dataset id")
 
-    dataset_output_path = ""
-    get_file_name = getattr(dataset_object, "get_file_name", None)
-    if callable(get_file_name):
-        try:
-            dataset_output_path = str(get_file_name(sync_cache=False) or "")
-        except TypeError:
-            dataset_output_path = str(get_file_name() or "")
-
     job_working_directory = job_context.job_working_directory
     marker_dir = os.path.join(job_working_directory, "_c4gh_stage", "outputs")
     plaintext_path = os.path.join(job_working_directory, "_crypt", "outputs", f"ds_{dataset_id}", "plaintext")
@@ -543,7 +536,6 @@ def _maybe_finalize_crypt4gh_assigned_primary_output(
 
     finalize_about_to_persist_crypt4gh_payload(
         output_path=str(discovered_output_path),
-        dataset_output_path=dataset_output_path,
         plaintext_path=plaintext_path,
         encrypted_ext=str(encrypted_ext),
         reencryption_service_url=str(crypt4gh_context.get("reencryption_service_url", "") or ""),

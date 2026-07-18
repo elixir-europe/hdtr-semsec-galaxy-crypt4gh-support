@@ -734,15 +734,6 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
     marker_dir = Path(job_working_directory) / "_c4gh_stage" / "outputs"
     marker_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset_output_path = ""
-    if dataset_object is not None:
-        get_file_name = getattr(dataset_object, "get_file_name", None)
-        if callable(get_file_name):
-            try:
-                dataset_output_path = str(get_file_name(sync_cache=False) or "")
-            except TypeError:
-                dataset_output_path = str(get_file_name() or "")
-
     plaintext_marker_id = f"ds_{dataset_id}" if isinstance(dataset_id, int) else f"path_{hashlib.sha256(output_path.encode('utf-8')).hexdigest()[:16]}"
     plaintext_path = Path(job_working_directory) / "_crypt" / "outputs" / plaintext_marker_id / "plaintext"
 
@@ -750,7 +741,6 @@ def _maybe_finalize_crypt4gh_about_to_persist_payload(
 
     finalize_about_to_persist_crypt4gh_payload(
         output_path=output_path,
-        dataset_output_path=dataset_output_path,
         plaintext_path=str(plaintext_path),
         encrypted_ext=extension,
         reencryption_service_url=reencryption_service_url,
