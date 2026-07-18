@@ -1,7 +1,5 @@
 from types import SimpleNamespace
 
-from pathlib import Path
-
 import pytest
 
 import galaxy.jobs as galaxy_jobs
@@ -92,30 +90,35 @@ def test_verify_crypt4gh_pre_success_evidence_wraps_crypt4gh_error(monkeypatch):
         wrapper._verify_crypt4gh_pre_success_evidence(SimpleNamespace(id=1), [])
 
 
-def test_verify_crypt4gh_pre_success_evidence_fails_for_tracked_payload_outside_job_scope(monkeypatch, tmp_path):
+def test_verify_crypt4gh_pre_success_evidence_allows_tracked_payload_on_object_store_path(monkeypatch, tmp_path):
     wrapper = JobWrapper.__new__(JobWrapper)
     working_directory = tmp_path / "job"
     working_directory.mkdir(parents=True, exist_ok=True)
     wrapper._MinimalJobWrapper__working_directory = str(working_directory)
 
-    outside_payload_path = Path("/tmp") / "crypt4gh-outside-scope-payload.dat"
+    object_store_payload_path = "/opt/galaxy/database/objects/0/e/b/dataset_0eb845c1-c842-43f0-93b0-9698641f4bd8.dat"
 
-    def _should_not_be_called(*, working_directory, output_dataset_associations):
-        del working_directory
-        del output_dataset_associations
-        raise AssertionError("pre-success verifier should fail closed before delegating to verifier")
+    captured = {}
 
-    monkeypatch.setattr(galaxy_jobs, "verify_crypt4gh_pre_success_output_evidence", _should_not_be_called)
+    def _fake_verifier(*, working_directory, output_dataset_associations):
+        captured["working_directory"] = working_directory
+        captured["output_dataset_associations"] = output_dataset_associations
+
+    monkeypatch.setattr(galaxy_jobs, "verify_crypt4gh_pre_success_output_evidence", _fake_verifier)
 
     crypt4gh_dataset = SimpleNamespace(
         ext="tabular.c4gh",
         metadata=SimpleNamespace(crypt4gh_header="header"),
-        dataset=SimpleNamespace(id=99, get_file_name=lambda sync_cache=False: str(outside_payload_path)),
+        dataset=SimpleNamespace(id=99, get_file_name=lambda sync_cache=False: object_store_payload_path),
     )
     association = SimpleNamespace(name="out", dataset=crypt4gh_dataset)
 
-    with pytest.raises(RuntimeError, match="outside job scope roots"):
-        wrapper._verify_crypt4gh_pre_success_evidence(SimpleNamespace(id=1), [association])
+    wrapper._verify_crypt4gh_pre_success_evidence(SimpleNamespace(id=1), [association])
+
+    assert captured == {
+        "working_directory": str(working_directory),
+        "output_dataset_associations": [association],
+    }
 
 
 def test_current_output_dataset_associations_include_late_discovered_outputs():

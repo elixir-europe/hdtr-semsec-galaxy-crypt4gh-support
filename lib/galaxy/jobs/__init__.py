@@ -2120,66 +2120,12 @@ class MinimalJobWrapper(HasResourceParameters):
 
     def _verify_crypt4gh_pre_success_evidence(self, job: Job, output_dataset_associations) -> None:
         try:
-            self._assert_crypt4gh_output_payloads_within_job_scope_roots(output_dataset_associations)
             verify_crypt4gh_pre_success_output_evidence(
                 working_directory=self.working_directory,
                 output_dataset_associations=output_dataset_associations,
             )
         except Crypt4GHRemoteExecutionError as exc:
             raise RuntimeError(str(exc)) from exc
-
-    def _assert_crypt4gh_output_payloads_within_job_scope_roots(self, output_dataset_associations) -> None:
-        working_root = os.path.abspath(self.working_directory)
-        parent_root = os.path.abspath(os.path.join(working_root, os.path.pardir))
-        allowed_roots: list[str] = [working_root]
-        if parent_root not in allowed_roots:
-            allowed_roots.append(parent_root)
-
-        for dataset_assoc in output_dataset_associations:
-            dataset_instance = getattr(dataset_assoc, "dataset", None)
-            if dataset_instance is None:
-                continue
-            if not self._is_crypt4gh_output_dataset_instance(dataset_instance):
-                continue
-
-            dataset_object = getattr(dataset_instance, "dataset", None) or dataset_instance
-            get_file_name = getattr(dataset_object, "get_file_name", None)
-            if not callable(get_file_name):
-                continue
-
-            try:
-                payload_path = str(get_file_name(sync_cache=False) or "")
-            except TypeError:
-                payload_path = str(get_file_name() or "")
-            if not payload_path:
-                continue
-
-            payload_abspath = os.path.abspath(payload_path)
-            if self._is_path_within_any_allowed_root(payload_abspath, allowed_roots):
-                continue
-
-            dataset_id = getattr(dataset_object, "id", None)
-            raise Crypt4GHRemoteExecutionError(
-                "Crypt4GH tracked output payload path is outside job scope roots: "
-                f"dataset_id={dataset_id} path={payload_abspath}"
-            )
-
-    def _is_crypt4gh_output_dataset_instance(self, dataset_instance) -> bool:
-        metadata = getattr(dataset_instance, "metadata", None)
-        if getattr(metadata, "crypt4gh_header", None):
-            return True
-
-        ext = str(getattr(dataset_instance, "ext", "") or getattr(dataset_instance, "extension", "") or "")
-        return ext.endswith(".c4gh")
-
-    def _is_path_within_any_allowed_root(self, candidate_path: str, allowed_roots: list[str]) -> bool:
-        for allowed_root in allowed_roots:
-            try:
-                if os.path.commonpath([candidate_path, allowed_root]) == allowed_root:
-                    return True
-            except Exception:
-                continue
-        return False
 
     def _current_output_dataset_associations(self, job: Job):
         return job.output_datasets + job.output_library_datasets
