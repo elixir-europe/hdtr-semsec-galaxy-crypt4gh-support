@@ -147,9 +147,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, and explicit symlink-cleanup failure-path coverage for declared-output purge.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, and permission-denied purge diagnostics assertions.
 - **Still needed**:
-  - add broader permission-denied and concurrent-mutation cleanup stress tests,
+  - add broader concurrent-mutation cleanup stress tests,
   - add Pulsar branch parity tests,
   - add additional TTL boundary and race-window scenarios.
 - **Priority / severity**: **High**.
@@ -314,3 +314,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: current purge behavior used `shutil.rmtree(...)` for extra-files directories, which raises `OSError` on symlink paths and can leave plaintext-linked entries behind in failure cleanup paths.
 - **Security impact**: positive. Failure-path purge now unlinks symlink extra-files entries directly (without recursive traversal) and preserves fail-closed cleanup behavior when encryption fails.
 - **Follow-up**: add permission-denied and concurrent-mutation assertions for purge diagnostics to complete broader edge-case coverage.
+
+### 2026-07-18 — Gap #10 add permission-denied diagnostics assertions for failure-path purge
+
+- **Decision**: require purge failure logs to include exception-class and message context, then add regression coverage asserting `PermissionError` diagnostics for extra-files cleanup failure.
+- **Why**: prior logs captured traceback data, but primary log messages did not reliably include explicit exception-class context; assertions for operator-visible diagnostics were missing.
+- **Security impact**: positive. Fail-closed behavior remains unchanged while diagnostics become more explicit and test-enforced for permission-denied cleanup failures.
+- **Follow-up**: add concurrent-mutation/race cleanup diagnostics assertions and stress tests to complete this Gap #10 subtrack.

@@ -1263,8 +1263,13 @@ def _purge_output_targets_after_finalization_failure(
                 )
                 if candidate_path.exists():
                     candidate_path.unlink()
-            except Exception:
-                log.exception("Failed to remove plaintext output candidate %s after Crypt4GH finalization failure", candidate_path)
+            except Exception as exc:
+                log.exception(
+                    "Failed to remove plaintext output candidate %s after Crypt4GH finalization failure (%s: %s)",
+                    candidate_path,
+                    exc.__class__.__name__,
+                    exc,
+                )
 
         marker_path_value = str(concrete_target.get("encrypted_marker_path", "") or "")
         if marker_path_value:
@@ -1277,10 +1282,12 @@ def _purge_output_targets_after_finalization_failure(
                 )
                 if marker_path.exists():
                     marker_path.unlink()
-            except Exception:
+            except Exception as exc:
                 log.exception(
-                    "Failed to remove encrypted marker %s after Crypt4GH finalization failure",
+                    "Failed to remove encrypted marker %s after Crypt4GH finalization failure (%s: %s)",
                     marker_path,
+                    exc.__class__.__name__,
+                    exc,
                 )
 
         extra_files_output_path_value = str(concrete_target.get("extra_files_output_path", "") or "")
@@ -1298,10 +1305,12 @@ def _purge_output_targets_after_finalization_failure(
                     shutil.rmtree(extra_files_output_path)
                 elif extra_files_output_path.exists():
                     extra_files_output_path.unlink()
-            except Exception:
+            except Exception as exc:
                 log.exception(
-                    "Failed to remove plaintext extra_files candidate %s after Crypt4GH finalization failure",
+                    "Failed to remove plaintext extra_files candidate %s after Crypt4GH finalization failure (%s: %s)",
                     extra_files_output_path,
+                    exc.__class__.__name__,
+                    exc,
                 )
 
         extra_files_manifest_path_value = str(concrete_target.get("extra_files_manifest_path", "") or "")
@@ -1315,10 +1324,12 @@ def _purge_output_targets_after_finalization_failure(
                 )
                 if extra_files_manifest_path.exists():
                     extra_files_manifest_path.unlink()
-            except Exception:
+            except Exception as exc:
                 log.exception(
-                    "Failed to remove extra_files manifest %s after Crypt4GH finalization failure",
+                    "Failed to remove extra_files manifest %s after Crypt4GH finalization failure (%s: %s)",
                     extra_files_manifest_path,
+                    exc.__class__.__name__,
+                    exc,
                 )
 
 
