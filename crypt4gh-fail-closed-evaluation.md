@@ -276,7 +276,7 @@ Key hardening already present on this branch/work item includes:
 ### Status summary
 
 - Non-Pulsar gaps in this branch are practically bridged and documented as mitigated.
-- Gap #4 (Pulsar-tail parity) is isolated to separate worktree/lane `pulsar-tail-20260718` per scope constraints.
+- Gap #4 (Pulsar-tail parity) is isolated to separate worktree/lane `pulsar-tail-20260718` per scope constraints, where it now has targeted unit parity tests for wrapper ordering and failure-gating semantics.
 - No further code changes are required in this branch for the non-Pulsar closure scope.
 
 ---
