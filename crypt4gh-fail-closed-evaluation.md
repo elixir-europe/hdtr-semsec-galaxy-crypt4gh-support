@@ -83,10 +83,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 4) Pulsar / `for_pulsar` branch divergence
 
 - **Gap**: Cleanup/finalization wrapping may not execute identically across Pulsar-oriented command assembly paths.
-- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, and preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, but parity across all Pulsar branches is not fully verified.
+- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, executes `tool_script.sh` with the configured job shell (with `/bin/sh` fallback when shell is unset/`none`) instead of hard-coded `bash`, invokes that script using the Pulsar-provided script directory path when available (fallback `../tool_script.sh`), and now has targeted unit parity coverage asserting wrapper → Pulsar tool-script wrapper → follow-up command ordering plus non-Pulsar-equivalent failure-gating shape.
 - **Still needed**:
-  - targeted Pulsar branch tests asserting wrapper + postrun + cleanup execution ordering,
-  - verification that failure semantics match non-Pulsar remote path.
+  - broader integration/runtime parity coverage across additional Pulsar destination variants.
 - **Priority / severity**: **High**.
 
 ## 5) Symlink / race / permission failures in best-effort purge
@@ -528,3 +527,10 @@ The Crypt4GH fail-closed posture in this branch is **closed for the non-Pulsar s
   - confirmed practical non-Pulsar coverage additions across purge stress diagnostics, TTL/expiry boundaries, marker-race handling, modify-input metadata reset behavior, wrapper/runtime edge behavior, and debug-surface gating.
 - **Scope boundary**: Gap #4 (Pulsar-tail parity) remains intentionally isolated to separate worktree/lane `pulsar-tail-20260718` and is excluded from this branch scope.
 - **Security impact**: positive. Branch-level non-Pulsar fail-closed controls are now coherent, test-backed, and documented as mitigated.
+
+### 2026-07-19 — Gap #4 add targeted Pulsar parity tests for wrapper ordering and failure gating semantics
+
+- **Decision**: add focused command-factory parity tests that assert Pulsar command assembly preserves wrapper ordering (`remote_tool_eval` wrapper, then Pulsar tool-script wrapper, then grouped follow-up chain) and keeps failure-gating semantics aligned with non-Pulsar remote assembly shape.
+- **Why**: Gap #4 still lacked direct parity assertions for wrapper/postrun/cleanup-adjacent command ordering and non-Pulsar-equivalent failure propagation shape, leaving regression risk in Pulsar-only command assembly branches.
+- **Security impact**: positive. Test-enforced ordering and gating parity reduce risk of Pulsar branch divergence that could bypass intended fail-closed stop-on-failure behavior.
+- **Follow-up**: extend parity from unit command-assembly assertions to broader integration/runtime Pulsar destination variants.
