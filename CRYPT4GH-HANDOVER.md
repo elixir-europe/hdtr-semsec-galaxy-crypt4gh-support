@@ -8,11 +8,13 @@ If you want a live example before reading code, see **Appendix A** for a public 
 
 ### The short version
 
-- The non-Pulsar hardening work in this branch closes or materially reduces the main fail-closed gaps targeted in this cycle.
-- Output handling now happens closer to the compute environment, which makes cleanup and encryption checks more reliable.
-- Discovered outputs are finalized before Galaxy persists them.
-- A production regression caused by an overly broad output scope gate was removed and replaced with narrower plaintext-root checks.
+- This branch makes encrypted-output handling safer and earlier in the job lifecycle.
+- Jobs fail sooner when the required secure runtime path is missing.
+- Galaxy checks encrypted outputs before marking jobs successful or saving discovered results.
+- Plaintext cleanup is more thorough and more explicit when something goes wrong.
 - Pulsar follow-up work was split into its own branch so it can be reviewed separately.
+
+In repo-specific terms, this means the non-Pulsar Crypt4GH hardening tightened remote-evaluation checks, finalize-before-persist handling for discovered outputs, plaintext-root containment, and cleanup diagnostics.
 
 ### Who should read which part
 
@@ -25,10 +27,10 @@ If you want a live example before reading code, see **Appendix A** for a public 
 
 The branch now blocks unsafe behavior at four clearer checkpoints in the job lifecycle:
 
-1. **Before launch**: jobs fail early unless the runtime is on the supported remote-evaluation path with the required config.
-2. **During execution**: the compute-side path owns finalization and cleanup closer to the produced files.
-3. **Before success / before persistence**: outputs are checked and finalized before Galaxy records success or persists discovered outputs.
-4. **After finalization errors**: cleanup is more defensive and more explicit about what went wrong.
+1. **Before launch**: jobs stop early if the supported secure path is missing; technically, readiness checks require the remote-evaluation path and its required config.
+2. **During execution**: encryption cleanup happens closer to where files are produced; technically, the compute-side path owns more of the finalize and cleanup flow.
+3. **Before success / before persistence**: Galaxy checks encrypted outputs before treating the run as complete or saving discovered files.
+4. **After finalization errors**: cleanup reports failures more clearly and handles risky filesystem cases more defensively.
 
 In practical terms, the branch is stronger around:
 
@@ -49,11 +51,17 @@ In practical terms, the branch is stronger around:
 - Destination-topology coverage is better than before, but not complete.
 - The largest security-heavy unit test files may become hard to maintain over time.
 
-For a live demonstrator of the supported flow, jump to **Appendix A** before the deep sections.
-
 ## Quick start / setup guide
 
 Use this section if you need the supported operator setup before reading the implementation details.
+
+### Operator checklist
+
+1. Deploy compute-side recryptor B (see section 5).
+2. Apply the minimum Galaxy configuration (see section 3).
+3. Confirm remote evaluation, extended metadata, and working-directory outputs (see section 4).
+4. Set TTL and debug preferences (see sections 7 and 8).
+5. Run manual verification (see section 9).
 
 ### 1. Supported execution model
 
@@ -156,25 +164,13 @@ Useful operator-oriented docs already in the tree:
 
 These are the best starting points for practical manual checks and live-smoke setup.
 
+If you only need supported setup and manual verification, you can stop here. The remaining sections are for reviewers and maintainers.
+
 ---
 
 Everything below is optional **deep-dive material for reviewers and maintainers**.
 
 ## Deep dive (for reviewers and maintainers)
-
-### Reference snapshot
-
-This section collects the branch inventory details that were previously front-loaded at the top of the document.
-
-- Primary branch: `explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
-- Primary branch scope: all non-Pulsar Crypt4GH fail-closed work in this worktree
-- Primary branch head: `41589e4876`
-- Base commit on `dev`: `5b9b6d3f20`
-- Main branch diff size: 16 files changed, `+4012/-223`
-- Main branch verification status: 133 tests passed, 0 failed
-- Pulsar follow-up branch: `work/pulsar-tail-20260718`
-- Pulsar branch diff size: 3 files changed, `+145/-7`
-- Pulsar branch verification status: 14 tests passed, 0 failed
 
 ### How the branch changed
 
@@ -194,21 +190,9 @@ That includes:
 
 The branch shifts sensitive output handling away from centrally authored wrapper logic and closer to the place where files actually exist.
 
-That matters because compute-side code can:
-
-- inspect real files,
-- tie cleanup directly to execution outcome,
-- and keep the plaintext lifecycle in one place.
-
 #### 3. Pre-success verification became stricter
 
 Jobs now need better evidence before Galaxy reports success for Crypt4GH outputs.
-
-That includes stronger checks for:
-
-- encrypted output evidence,
-- extension and marker handling,
-- and correctness before success or persistence.
 
 #### 4. Plaintext containment became narrower and safer
 
@@ -285,6 +269,20 @@ The added parity tests are useful, but they are still mostly **command-shape ass
 - `work/fix-remote-tool-eval-python-fail-closed` already exists for earlier remote-tool-eval hardening.
 - `work/pulsar-tail-20260718` already exists for the Pulsar parity slice.
 - `backup/explore-...-before-pulsar-rewrite-20260718` preserves the pre-extraction state.
+
+### Reference snapshot
+
+If you need the branch inventory details while reviewing, use this snapshot:
+
+> - Primary branch: `explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
+> - Primary branch scope: all non-Pulsar Crypt4GH fail-closed work in this worktree
+> - Primary branch head: `41589e4876`
+> - Base commit on `dev`: `5b9b6d3f20`
+> - Main branch diff size: 16 files changed, `+4012/-223`
+> - Main branch verification status: 133 tests passed, 0 failed
+> - Pulsar follow-up branch: `work/pulsar-tail-20260718`
+> - Pulsar branch diff size: 3 files changed, `+145/-7`
+> - Pulsar branch verification status: 14 tests passed, 0 failed
 
 ### Code changes by file
 
@@ -713,14 +711,7 @@ This improved reviewability even though it made history reconstruction more manu
 
 For the **non-Pulsar** scope, this branch is in a substantially better state than the branch base.
 
-The main gains are:
-
-- discovered outputs are finalized earlier and more safely,
-- plaintext provenance is constrained more precisely,
-- job success is tied to stronger evidence,
-- cleanup behavior is safer and more diagnosable,
-- extension and marker handling is less racy,
-- and the architecture is more coherent with the compute-side trust model.
+The key outcomes are summarized in the overview; the deep-dive sections above explain why those outcomes now hold and where the remaining risks still sit.
 
 The main caution is no longer “is this work useful?” but “how should it now be reviewed and split?” The best near-term split candidates are the general object-wrapper fix, any reusable containment or diagnostic helpers, and the isolated Pulsar parity branch.
 
