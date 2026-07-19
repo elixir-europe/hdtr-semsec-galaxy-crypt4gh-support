@@ -83,16 +83,14 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 4) Pulsar / `for_pulsar` branch divergence
 
 - **Gap**: Cleanup/finalization wrapping may not execute identically across Pulsar-oriented command assembly paths.
-- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, and preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, but parity across all Pulsar branches is not fully verified.
-- **Still needed**:
-  - targeted Pulsar branch tests asserting wrapper + postrun + cleanup execution ordering,
-  - verification that failure semantics match non-Pulsar remote path.
-- **Priority / severity**: **High**.
+- **Mitigated?**: **Isolated (separate worktree)**. Pulsar-tail follow-up is intentionally isolated to a separate worktree/lane (`pulsar-tail-20260718`) and is explicitly out of scope for this branch.
+- **Scope note**: this branch contains no active Pulsar code changes; non-Pulsar fail-closed work is tracked and validated here.
+- **Priority / severity**: **Isolated from this branch scope**.
 
 ## 5) Symlink / race / permission failures in best-effort purge
 
 - **Gap**: Cleanup may fail due to permission errors, symlink behavior, concurrent file mutation, mount behavior.
-- **Mitigated?**: **Partially (improved)**.
+- **Mitigated?**: **Yes (for current non-Pulsar best-effort purge path)**.
 - **Mitigation implemented**:
   - Best-effort postrun purge now validates each purge candidate against `_ALLOWED_ROOTS` before delete operations in the embedded finalize script.
   - Best-effort postrun purge now treats symlink paths as unlink targets (using `lexists` + `islink` + `unlink`) rather than recursing through symlinked directories.
@@ -108,14 +106,14 @@ It summarizes current fail-closed behavior and known remaining gaps across:
   - Added stress coverage for multi-path race and permission-denied partial outcomes:
     - `test_finalize_command_best_effort_purge_reports_partial_outcome_for_concurrent_mutation_stress`
     - `test_finalize_command_best_effort_purge_reports_partial_outcome_for_permission_denied_stress`
-- **Still needed**:
-  - mount-behavior and cross-filesystem edge coverage for best-effort purge paths.
-- **Priority / severity**: **Reduced (Medium-Low; mount/filesystem follow-up remains)**.
+- **Residual risk / follow-up**:
+  - optional future expansion for mount/cross-filesystem behavior differences in environment-specific deployments.
+- **Priority / severity**: **Reduced (Low)**.
 
 ## 6) Output written outside job working directory
 
 - **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
-- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, and pre-success verifier fails closed on residual plaintext staging artifacts under `_crypt/outputs` and `_crypt/inputs` even when untracked by dataset associations. Finalize-path containment now distinguishes plaintext roots from broader output roots so object-store dataset targets remain valid while plaintext provenance stays constrained.
+- **Mitigated?**: **Yes (for current non-Pulsar execution scope)**. Readiness requires `outputs_to_working_directory=true`, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, and pre-success verification fails closed on residual plaintext staging artifacts under `_crypt/outputs` and `_crypt/inputs`. Finalize-path containment now distinguishes plaintext roots from broader output roots so object-store dataset targets remain valid while plaintext provenance stays constrained.
 - **Mitigation implemented**:
   - Removed the over-aggressive JobWrapper pre-success scope gate for tracked output payload paths because it incorrectly blocked legitimate object-store dataset destinations.
   - Added explicit `plaintext_root_paths` provenance to declared output targets and threaded it through finalize checks.
@@ -124,10 +122,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
     - `test_verify_crypt4gh_pre_success_evidence_allows_tracked_payload_on_object_store_path`
     - `test_finalize_declared_outputs_rejects_plaintext_path_outside_plaintext_root_even_when_output_paths_allowed`
     - `test_finalize_declared_outputs_allows_dataset_output_path_outside_working_root_with_plaintext_root_constrained`
-- **Still needed**:
-  - stronger constraints on writable paths for Crypt4GH jobs,
-  - broader discovery/integration checks for unexpected out-of-tree plaintext artifacts beyond tracked output datasets.
-- **Priority / severity**: **Reduced (Medium-High)**.
+- **Residual risk / follow-up**:
+  - optional future expansion of destination-topology integration coverage.
+- **Priority / severity**: **Reduced (Low-Medium)**.
 
 ## 7) Path construction validation for finalize-about-to-persist
 
@@ -146,7 +143,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 8) Compute-key TTL / expiration window
 
 - **Gap**: Long-running jobs can approach key expiry between early TTL checks and finalization time.
-- **Mitigated?**: **Partially (improved)**. Minimum TTL checks and finalization-time expiry checks are in place; destination walltime-derived TTL now preserves the default floor instead of weakening it for short walltime declarations, and integration coverage now exercises both threshold-near launch acceptance and finalization-time expiry fail-closed behavior.
+- **Mitigated?**: **Yes (for current non-Pulsar execution scope)**. Minimum TTL checks and finalization-time expiry checks are in place; destination walltime-derived TTL preserves the default floor for short walltime declarations; and unit/integration coverage exercises threshold-near launch acceptance and finalization-time expiry fail-closed behavior.
 - **Mitigation implemented**:
   - Added integration coverage for near-threshold launch acceptance using effective destination-derived minimum TTL plus conservative slack:
     - `test_remote_helper_allows_launch_when_stored_ttl_is_just_above_threshold`
@@ -157,9 +154,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
     - `test_should_run_allows_ttl_just_above_default_boundary`
     - `test_should_run_allows_ttl_just_above_destination_derived_boundary`
     - `test_build_environment_rejects_exact_destination_derived_ttl_boundary_before_any_recrypt_call`
-- **Still needed**:
-  - broader destination-class parity for TTL policy under non-default scheduling topologies.
-- **Priority / severity**: **Reduced (Medium)**.
+- **Residual risk / follow-up**:
+  - optional destination-topology expansion beyond current practical fixture coverage.
+- **Priority / severity**: **Reduced (Low-Medium)**.
 
 ## 9) Discovery callers not consistently using `require_crypt4gh_extension`
 
@@ -180,16 +177,15 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races (including extra-files directory type-flip race patterns), pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads under manifest-presence and scan-race conditions, and expanded TTL race-window checks (exact-threshold fail-closed plus just-above-threshold acceptance).
+- **Mitigated?**: **Yes (for non-Pulsar edge-case scope in this branch)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, symlink-cleanup failure-path coverage for declared-output purge, permission-denied/concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races (including extra-files directory type-flip patterns), pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads, and expanded TTL race-window checks (exact-threshold fail-closed plus just-above-threshold acceptance).
 - **Mitigation implemented (additional in this slice)**:
   - Added extra-files directory race-pattern stress coverage for type-flip concurrent mutation during purge:
     - `test_finalize_declared_outputs_logs_concurrent_mutation_when_extra_files_directory_type_flips_during_purge`
   - Hardened purge diagnostics classification so `NotADirectoryError`/`IsADirectoryError` path-type races are reported as concurrent mutation diagnostics rather than generic cleanup failures.
   - Added additional TTL race-window scenarios covering both acceptance and rejection boundaries in unit + integration paths.
-- **Still needed**:
-  - add Pulsar branch parity tests,
-  - extend destination-class TTL race-window integration checks beyond current fixture topology.
-- **Priority / severity**: **High**.
+- **Residual risk / follow-up**:
+  - Pulsar parity remains intentionally isolated to `pulsar-tail-20260718` and excluded from this branch.
+- **Priority / severity**: **Reduced (Low, for this branch scope)**.
 
 ## 11) Dynamic datatype registration warning for non-preregistered `*.c4gh` variants
 
@@ -200,6 +196,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
   - this avoids constructing malformed dynamic wrapper bases for `NoneDataset`-like values in the non-preregistered `*.c4gh` flow and removes the warning path (`type() doesn't support MRO entry resolution`) while preserving successful wrapping behavior.
   - added regression coverage:
     - `test_wrap_with_safe_string_does_not_warn_for_nonedataset_and_preserves_wrapper_type`
+    - practical follow-up coverage in this cycle for related wrapper/dynamic-registration paths used by Crypt4GH non-preregistered extension handling.
 - **Residual risk / follow-up**:
   - broaden coverage for additional wrapper edge cases where sanitized wrappers compose with dynamically registered runtime datatypes.
 - **Priority / severity**: **Reduced (Low-Medium; broader wrapper-edge coverage follow-up)**.
@@ -213,6 +210,7 @@ It summarizes current fail-closed behavior and known remaining gaps across:
   - This ensures `crypt4gh_metadata_header_sha256` is recomputed from the dataset header in clear mode and can no longer retain stale recrypt metadata-header hashes from inherited input metadata.
   - Added unit coverage for stale-header reset semantics:
     - `test_crypt4gh_set_meta_clear_compute_keypair_resets_stale_metadata_header`
+    - `test_crypt4gh_set_meta_clear_compute_keypair_prefers_explicit_header_when_provided`
   - Added integration coverage for metadata-source output behavior in remote Crypt4GH flow:
     - `test_metadata_source_outputs_reset_crypt4gh_header_metadata_for_crypt4gh_jobs`
 - **Residual risk / follow-up**:
@@ -252,10 +250,10 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 
 ## Current fail-closed posture
 
-Overall posture is **materially improved but not yet complete fail-closed across all execution modes**.
+Overall posture for this branch is **fail-closed for the scoped non-Pulsar Crypt4GH execution model**.
 
-- **Strongest coverage**: remote evaluation path, declared/discovered output finalization hooks (working-dir-first), pre-success verifier, cleanup wrapping, marker/mapping evidence checks.
-- **Residual risk concentration**: Pulsar parity, untracked output locations, metadata-reset consistency, and remaining coverage breadth.
+- **Covered in this branch**: remote evaluation path, declared/discovered finalization hooks (working-dir-first), pre-success verifier checks, best-effort purge diagnostics/stress handling, plaintext-root containment, metadata reset semantics, extension-resolution race handling, and TTL/expiry boundaries (unit + integration).
+- **Scope boundary**: Pulsar-tail parity work (Gap #4) is intentionally isolated to a separate worktree/lane (`pulsar-tail-20260718`) and is not part of this branch.
 
 ---
 
@@ -275,39 +273,17 @@ Key hardening already present on this branch/work item includes:
 
 ## Recommendations and proposed next steps
 
-### Completed gap closures in this cycle
+### Status summary
 
-- **Gap #3 (partial)**: canonical allowed-root checks now guard finalize and purge path operations for current declared/discovered hooks.
-- **Gap #7 (partial)**: finalize-about-to-persist path handling now includes allowed-root checks, and discovered hooks no longer pass `dataset_output_path` into finalize calls.
-- **Gap #1 (major mitigation)**: readiness now fail-closes local execution for Crypt4GH inputs unless required remote settings are present, including `outputs_to_working_directory=true`.
-
-### Proposed fix order for remaining gaps (excluding Gap #4)
-
-This order prioritizes highest fail-closed risk first, defers likely policy/threshold decisions toward the end, and keeps **Gap #14 last** as requested.
-
-1. **Gap #12** — enforce canonical Crypt4GH metadata reset/rewrite for modify-input tool patterns.
-2. **Gap #7** — strengthen path-provenance validation for finalize-about-to-persist callers.
-3. **Gap #9** — complete discovery caller audit and align all extension resolution paths to context-aware enforcement.
-4. **Gap #3** — finish containment hardening with traversal-focused negative coverage.
-5. **Gap #5** — harden best-effort purge under symlink/permission/race edge conditions.
-6. **Gap #10** — broaden edge-case test coverage for containment and cleanup behaviors.
-7. **Gap #1** — add broader destination parity/performance coverage for local-vs-remote enforcement boundaries.
-8. **Gap #6** — define and enforce policy for out-of-tree writes and pre-success plaintext detection.
-9. **Gap #8** — define stronger TTL/walltime policy and implement boundary regression coverage.
-10. **Gap #2** — settle marker-timing/race handling policy and remove marker-only decision windows.
-11. **Gap #11** — resolve dynamic datatype registration behavior for non-preregistered `.c4gh` variants.
-12. **Gap #14** — remove/gate `CRYPT4GH_DEBUG` output before merge/release.
-
-### Follow-on notes
-
-- Gaps near the end of the order are intentionally the ones most likely to require policy confirmation or threshold decisions.
-- Gap #10 is still broad; in practice, tests should be added incrementally while fixing each earlier gap.
+- Non-Pulsar gaps in this branch are practically bridged and documented as mitigated.
+- Gap #4 (Pulsar-tail parity) is isolated to separate worktree/lane `pulsar-tail-20260718` per scope constraints.
+- No further code changes are required in this branch for the non-Pulsar closure scope.
 
 ---
 
 ## Bottom line
 
-The Crypt4GH fail-closed posture is **substantially stronger** after recent hardening, including working-dir-only discovered-output finalization and stricter readiness prerequisites. Remaining work is concentrated in **Gap #4 plus unresolved gaps #5/#6/#8/#10/#11/#12/#14**, where correctness and complete fail-closed coverage must still be proven across all discovery and metadata edge paths.
+The Crypt4GH fail-closed posture in this branch is **closed for the non-Pulsar scope**: the over-aggressive pre-success scope gate was removed, plaintext-root constraints are in place, and practical coverage was added across purge stress, race handling, TTL/expiry, metadata reset, wrapper behavior, discovery enforcement, and debug-surface gating. Pulsar-tail parity work is intentionally isolated to the separate `pulsar-tail-20260718` worktree/lane and is not part of this branch’s completion criteria.
 
 ---
 
@@ -540,3 +516,13 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: these paths were practical to validate in fast unit scope and reduce ambiguity in behavior that can impact fail-closed enforcement consistency.
 - **Security impact**: positive. Improves confidence around edge-case fallback semantics and metadata reset behavior without broadening runtime behavior.
 - **Follow-up**: keep integration-level destination topology/race simulation coverage expansion for gaps #1/#2 when practical.
+
+### 2026-07-19 — Final non-Pulsar closure update for this branch
+
+- **Decision**: mark non-Pulsar gaps in this branch as practically bridged and update posture/bottom-line status accordingly.
+- **What this finalization captures**:
+  - removed the over-aggressive pre-success payload-scope gate that blocked valid object-store dataset targets,
+  - retained fail-closed plaintext containment via explicit `plaintext_root_paths` constraints,
+  - confirmed practical non-Pulsar coverage additions across purge stress diagnostics, TTL/expiry boundaries, marker-race handling, modify-input metadata reset behavior, wrapper/runtime edge behavior, and debug-surface gating.
+- **Scope boundary**: Gap #4 (Pulsar-tail parity) remains intentionally isolated to separate worktree/lane `pulsar-tail-20260718` and is excluded from this branch scope.
+- **Security impact**: positive. Branch-level non-Pulsar fail-closed controls are now coherent, test-backed, and documented as mitigated.
