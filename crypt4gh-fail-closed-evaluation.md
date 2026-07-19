@@ -58,6 +58,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
   - marker presence alone is no longer treated as sufficient evidence for implicit extension upgrades in non-required paths; evidence now requires marker files (`discovered_designations.json`, `path_*.encrypted`, or `ds_*.encrypted`).
   - marker-directory list races (`FileNotFoundError`/`OSError` between `isdir` and `listdir`) are treated as no marker evidence, while context-required paths still force `.c4gh` extension resolution through `require_crypt4gh_extension=True`.
   - added regression coverage for empty marker directories, `ds_*.encrypted` marker evidence, and list-race behavior in both required and non-required contexts.
+  - added explicit `OSError` list-race regression coverage mirroring existing `FileNotFoundError` race semantics:
+    - `test_resolve_discovered_extension_treats_marker_dir_oserror_race_as_no_evidence_without_required_context`
+    - `test_resolve_discovered_extension_requires_crypt4gh_when_marker_dir_oserror_races`
 - **Residual risk / follow-up**:
   - extend integration coverage to include more end-to-end discovery/finalize race simulations under concurrent cleanup pressure.
 - **Priority / severity**: **Reduced (Low-Medium; mostly broader integration hardening)**.
@@ -519,3 +522,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: previously covered races focused on missing-path mutation; type-flip races and just-above-threshold TTL acceptance were underrepresented despite being realistic in concurrent filesystems and scheduler timing.
 - **Security impact**: positive. Improves confidence that fail-closed controls hold at TTL boundaries and under additional extra-files cleanup race patterns without broadening execution surface.
 - **Follow-up**: continue with Pulsar parity and broader destination-class TTL integration coverage.
+
+### 2026-07-19 — Gap #2 add explicit `OSError` marker-list race parity coverage
+
+- **Decision**: add targeted tests to ensure marker-directory list `OSError` races follow the same required-vs-optional extension-resolution semantics as existing `FileNotFoundError` race handling.
+- **Why**: `OSError` list races are a realistic filesystem concurrency mode and should preserve the same fail-open/fail-closed split already defined for required extension contexts.
+- **Security impact**: positive. Reduces ambiguity in race handling semantics for extension resolution under marker-directory mutation.
+- **Follow-up**: extend integration-level race simulations where feasible.
