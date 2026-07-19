@@ -4,6 +4,8 @@
 
 This handover covers the full Crypt4GH story on this branch: encrypted datatype support, browser-side recrypt workflows, the remote-execution redesign, and the later fail-closed runtime tightening.
 
+The supported setup does **not** require sharing private keys with Galaxy at all: not user-side private keys, and not the temporary compute-side private keys created for the recrypt workflow.
+
 If you want a live example before reading code, a public Galaxy history is available at:
 [https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo](https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo)
 
@@ -98,6 +100,8 @@ In plain terms:
 - Recryptor B rewrites headers for compute-side job/runtime use and output return.
 - `remote_tool_eval.py` plus the Crypt4GH runtime helper own the sensitive plaintext-compatible execution path.
 - Local tool evaluation is intentionally not part of the supported Crypt4GH flow.
+
+No step in this setup requires Galaxy to receive or persist user private keys or the temporary compute-side private keys minted for compute use.
 
 ### 2. Recryptor A vs recryptor B
 
@@ -248,7 +252,7 @@ The easiest way to understand the current branch is to look at the main entities
 
 | Entity | Main files / surfaces | Role in the Crypt4GH path |
 | --- | --- | --- |
-| **Galaxy datatype and registry layer** | `lib/galaxy/datatypes/binary.py`, `lib/galaxy/datatypes/registry.py`, `lib/galaxy/datatypes/sniff.py`, `lib/galaxy/util/checkers.py`, `lib/galaxy/util/crypt4gh.py` | Recognizes Crypt4GH files, preserves inner datatype information, stores the header as metadata, and generates `.c4gh` / nested dynamic datatypes. |
+| **Galaxy datatype and registry layer** | `lib/galaxy/datatypes/binary.py`, `lib/galaxy/datatypes/registry.py`, `lib/galaxy/datatypes/sniff.py`, `lib/galaxy/util/checkers.py`, `lib/galaxy/util/crypt4gh.py`, `lib/galaxy/util/compression_utils.py` | Recognizes Crypt4GH files, preserves inner datatype information, stores the header as metadata, prioritizes Crypt4GH detection before gzip during file opening, and generates `.c4gh` / nested dynamic datatypes. |
 | **Galaxy metadata/reset layer** | `lib/galaxy/metadata/__init__.py`, `lib/galaxy/metadata/set_metadata.py`, `lib/galaxy/model/__init__.py` | Carries Crypt4GH metadata through dataset lifecycle events and resets stale compute-key metadata when outputs should stop looking like compute-recrypted inputs. |
 | **Galaxy client / history UI** | `client/src/components/History/Content/Dataset/DatasetActions.vue` | Exposes the visible recrypt action and creates the user-facing “prepare for compute” workflow. |
 | **Recryptor A (user-side)** | external/browser-adjacent service | Uses user-side key context to prepare headers for compute use. In the checked-in UI flow, this is still assumed to exist at `https://localhost:61357/recrypt_header`. |
@@ -261,6 +265,14 @@ The easiest way to understand the current branch is to look at the main entities
 #### Overall trace of a typical Crypt4GH run
 
 This is the high-level path the code implements today.
+
+##### Key-pair types used in the design
+
+| Key type | When created | Where it lives | Longevity | Scope |
+| --- | --- | --- | --- | --- |
+| **User key pair** | Created outside Galaxy by the user or user-side key-management tooling | User-controlled systems / recryptor A-side context | Long-lived | Lets the user decrypt data and authorize recrypt into compute context |
+| **Compute key pair** | Created by compute-side recryptor B for a user and time slice | Compute-side recryptor storage only | Temporary, bounded by the compute-key expiration window | Represents compute-readable access for a user/session slice without exposing the user private key |
+| **Job key pair** | Created per job inside the runtime helper | In-memory during the running job | Per job, never persisted to disk | Gives one job a short-lived local decryption/encryption context for its own runtime path |
 
 ##### 1. Data ingestion and dataset typing
 
@@ -275,10 +287,14 @@ This is the high-level path the code implements today.
 - The browser-side flow sends the stored header to recryptor A.
 - Recryptor A obtains compute-side key context (via the surrounding A/B workflow) and prepares a compute-readable header.
 - Galaxy stores the returned metadata on a copied dataset, including the compute key id / expiration information needed by later runtime checks.
+- At this point the relevant keys are:
+  - the long-lived user key pair stays user-side,
+  - the temporary compute key pair lives only with compute-side recryptor B,
+  - and Galaxy sees only header material plus compute-key metadata such as key id / expiration.
 
 ##### 3. Job readiness and launch
 
-- When a tool run sees a Crypt4GH input that needs plaintext-compatible execution, `assert_crypt4gh_job_readiness(...)` in the runtime helper checks the supported execution contract.
+- When a job includes any Crypt4GH input, `assert_crypt4gh_job_readiness(...)` in the runtime helper checks the supported execution contract.
 - For the supported path, Galaxy must effectively resolve to:
   - transparent input matching enabled,
   - remote Crypt4GH execution staging enabled,
@@ -292,6 +308,7 @@ This is the high-level path the code implements today.
 
 - `remote_tool_eval.py` runs on the execution side and loads the minimal app/tool context.
 - The Crypt4GH helper prepares `_crypt/inputs/.../plaintext` material under the job working directory rather than relying on the older Galaxy-side staging model.
+- The helper generates a per-job key pair in memory only; the job public key is sent to recryptor B, while the job private key never leaves process memory and is not persisted to disk.
 - Galaxy calls recryptor B to rewrite headers for job-local compute use through `POST /recrypt_header_to_job_key`.
 - The actual tool then runs against plaintext-compatible paths inside the compute-local workspace.
 
@@ -306,9 +323,35 @@ Different output classes need slightly different handling, but they all converge
 | **`extra_files` payloads** | shared persisted-payload enforcement path | `extra_files` payload files are treated as sensitive outputs, finalized individually, and covered by manifest/evidence checks. |
 | **Metadata-source / modify-input outputs** | metadata reset path via `Crypt4GHDynamicCompressedArchive.set_meta(...)` | Stale compute-key metadata and stale header provenance are cleared so outputs do not incorrectly look like reusable compute-recrypted inputs. |
 
+##### Output-return path in more detail
+
+- Galaxy encrypts plaintext output locally to the compute public key.
+- It then extracts only the Crypt4GH header from that intermediate encrypted file and sends only that header to compute-side recryptor B via `POST /recrypt_header_to_user_key`.
+- Recryptor B returns a user-readable replacement header.
+- Galaxy rewrites the final output file as:
+  - returned header from recryptor B,
+  - plus the unchanged encrypted body from the compute-encrypted intermediate file.
+- This means output return, like input preparation, stays header-only across the recryptor boundary; Galaxy never needs the user private key and does not send plaintext output bodies to recryptor B.
+
+##### Output types and plaintext/encryption rules
+
+This table follows `crypt4gh-phase-2-output-enforcement-spec.md`, especially the section **Encryption scope and plaintext allow-list**.
+
+| Output type | Allowed plaintext / must be encrypted | How Crypt4GH code handles them (and where) | Comments |
+| --- | --- | --- | --- |
+| **Persisted primary output payloads (declared/simple outputs)** | Must be encrypted | Finalized in `lib/galaxy/tools/crypt4gh_remote_execution.py`; finish-time extension reapplication and verifier run in `lib/galaxy/jobs/__init__.py` | The simplest output class, but still depends on marker evidence before success. |
+| **Persisted discovered output payloads** | Must be encrypted | Discovery/persistence hook plus Crypt4GH finalization in `lib/galaxy/model/store/discover.py`, `lib/galaxy/tools/crypt4gh_remote_execution.py`, and finish-time verification in `lib/galaxy/jobs/__init__.py` | Hardest output class conceptually because discovered datasets have multiple subtypes and path models; the branch routes them through persisted-dataset mapping rather than a narrower Crypt4GH-only selector. |
+| **Persisted collection outputs** | Must be encrypted | Covered through the discovered/persisted output route and final verification | Collection discovery is a concrete high-risk discovered-output subtype because many datasets can be created at once. |
+| **Persisted `extra_files` payloads** | Must be encrypted | Finalized in `lib/galaxy/tools/crypt4gh_remote_execution.py` with extra-files manifest evidence; verifier checks in `lib/galaxy/jobs/__init__.py` | Manifest completeness matters here; marker/manifest mismatches are fail-closed. |
+| **Metadata-source / modify-input outputs** | Final persisted payload must be encrypted; stale input-side compute metadata must be cleared | Metadata reset path in `lib/galaxy/datatypes/binary.py` and metadata/discovery handling in `lib/galaxy/metadata/set_metadata.py` and `lib/galaxy/model/store/discover.py` | The tricky part is not just encryption, but avoiding stale compute-key metadata/header provenance from the source dataset. |
+| **Metadata/control artifacts** | Allowed plaintext | Remain in the plaintext allow-list per the output-enforcement spec; runtime/orchestration paths use them without treating them as persisted payloads | These are framework/control files, not dataset payloads. |
+| **Tool script / control artifacts** | Allowed plaintext | Remain outside dataset-payload enforcement per the output-enforcement spec | Same reasoning as metadata/control files: readable by the framework, not published as encrypted datasets. |
+| **`stdout/stderr`** | Allowed plaintext for now | Explicit temporary allow-list in the output-enforcement spec; not treated as encrypted dataset payloads | Known weak spot: plaintext can escape here, which is why the docs/spec call this out as deferred secure-log work. |
+
 ##### 6. Pre-success verification and cleanup
 
 - Before job success is finalized, the runtime helper verifies encryption evidence for persisted payloads.
+- Marker files and manifests under `_c4gh_stage/outputs` record encrypted-extension/evidence state, and `JobWrapper.finish()` reapplies encrypted extensions plus runs the pre-success verifier before Galaxy declares success.
 - TTL checks, containment checks, and output-evidence checks all fail closed.
 - Cleanup removes `_crypt/inputs` and `_crypt/outputs` plaintext artifacts as defensively as possible.
 - Diagnostics try to preserve the real failure class instead of turning everything into a generic cleanup error.
@@ -375,7 +418,7 @@ That spec is especially useful if a reviewer wants the stricter behavior around 
 
 ### Phase chronology across the branch
 
-This handover now covers the entire Crypt4GH-relevant branch history from its divergence from `dev` / `origin/dev`, not only the last hardening-focused slice.
+This handover now covers the entire Crypt4GH-relevant branch history from its divergence from `dev` / `origin/dev`.
 
 #### Phase 1 — Initial Crypt4GH dataset support
 
@@ -518,13 +561,14 @@ If someone is reading the branch in code rather than in commit order, these are 
 #### Datatype detection, metadata, and upload
 
 - `lib/galaxy/util/checkers.py`
+- `lib/galaxy/util/compression_utils.py`
 - `lib/galaxy/util/crypt4gh.py`
 - `lib/galaxy/datatypes/sniff.py`
 - `lib/galaxy/datatypes/binary.py`
 - `lib/galaxy/datatypes/registry.py`
 - `lib/galaxy/datatypes/upload_util.py`
 
-These files define how Galaxy recognizes Crypt4GH files, registers dynamic wrapper datatypes, stores the header in metadata, and keeps the inner datatype available to tools and later runtime steps.
+These files define how Galaxy recognizes Crypt4GH files, prioritizes Crypt4GH detection before gzip during file opening, registers dynamic wrapper datatypes, stores the header in metadata, and keeps the inner datatype available to tools and later runtime steps.
 
 #### Browser/UI and dataset metadata flow
 
@@ -612,7 +656,7 @@ Important integrated behaviors called out explicitly:
 
 ### Final assessment
 
-For the non-Pulsar scope, this branch now reads most clearly as a full Crypt4GH support branch rather than as a single hardening-focused slice. The main operator-facing story is:
+For the non-Pulsar scope, this branch now reads most clearly as a full Crypt4GH support branch. The main operator-facing story is:
 
 - encrypted datasets are typed and tracked correctly,
 - the user can prepare them for compute use,
