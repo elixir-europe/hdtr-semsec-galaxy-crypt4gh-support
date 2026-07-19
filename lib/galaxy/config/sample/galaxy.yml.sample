@@ -3035,7 +3035,7 @@ galaxy:
   # requires enable_crypt4gh_transparent_input_matching: true.
   #enable_crypt4gh_remote_execution_staging: false
 
-  # URL of the crypt4gh re-encryptor service compute-side recryptor B endpoint. Galaxy
+  # URL of the crypt4gh recryptor service — compute-side recryptor B endpoint. Galaxy
   # sends header-only re-encryption requests to compute-side recryptor B
   # during remote tool execution and never transfers encrypted payload
   # bodies.
