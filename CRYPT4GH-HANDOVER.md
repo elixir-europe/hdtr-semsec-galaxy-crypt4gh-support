@@ -4,7 +4,7 @@
 
 This handover covers the full Crypt4GH story on this branch: encrypted datatype support, browser-side recrypt workflows, the remote-execution redesign, and the later fail-closed runtime tightening.
 
-The supported setup does **not** require sharing private keys with Galaxy at all: not user-side private keys, and not the temporary compute-side private keys created for the recrypt workflow.
+The supported setup does **not** require sharing private keys with Galaxy at all: not user-side private keys, and not the temporary compute-side private keys created for the recrypt workflow. Public keys are exchanged where needed.
 
 If you want a live example before reading code, a public Galaxy history is available at:
 [https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo](https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo)
@@ -118,7 +118,7 @@ The later phases of the branch split the recrypt workflow into two roles:
   - rewrites headers into job-local or user-returnable form,
   - default service URL example for docs/config: `https://recryptor-b:61358`
 
-This split matters because Galaxy is not meant to hold user private keys or compute-side private keys.
+This split matters because Galaxy is not meant to hold user private keys or compute-side private keys, even though the corresponding public keys may be exchanged where needed.
 
 ### 3. Minimum Galaxy configuration
 
@@ -270,9 +270,9 @@ This is the high-level path the code implements today.
 
 | Key type | When created | Where it lives | Longevity | Scope |
 | --- | --- | --- | --- | --- |
-| **User key pair** | Created outside Galaxy by the user or user-side key-management tooling | User-controlled systems / recryptor A-side context | Long-lived | Lets the user decrypt data and authorize recrypt into compute context |
-| **Compute key pair** | Created by compute-side recryptor B for a user and time slice | Compute-side recryptor storage only | Temporary, bounded by the compute-key expiration window | Represents compute-readable access for a user/session slice without exposing the user private key |
-| **Job key pair** | Created per job inside the runtime helper | In-memory during the running job | Per job, never persisted to disk | Gives one job a short-lived local decryption/encryption context for its own runtime path |
+| **User key pair** | Created outside Galaxy by the user or user-side key-management tooling | User-controlled systems / recryptor A-side context | Long-lived | The user private key stays user-side; the user public key can be shared with recryptor-side services as needed |
+| **Compute key pair** | Created by compute-side recryptor B for a user and time slice | Compute-side recryptor storage only | Temporary, bounded by the compute-key expiration window | The compute private key stays inside recryptor B; the compute public key is what Galaxy and related flows use |
+| **Job key pair** | Created per job inside the runtime helper | In-memory during the running job | Per job, never persisted to disk | The job public key is sent to recryptor B; the job private key stays in-memory only for the running job |
 
 ##### 1. Data ingestion and dataset typing
 
@@ -288,8 +288,8 @@ This is the high-level path the code implements today.
 - Recryptor A obtains compute-side key context (via the surrounding A/B workflow) and prepares a compute-readable header.
 - Galaxy stores the returned metadata on a copied dataset, including the compute key id / expiration information needed by later runtime checks.
 - At this point the relevant keys are:
-  - the long-lived user key pair stays user-side,
-  - the temporary compute key pair lives only with compute-side recryptor B,
+  - the long-lived user private key stays user-side, while the user public key can be shared with recryptor-side services,
+  - the temporary compute private key lives only with compute-side recryptor B, while the compute public key is shared as needed,
   - and Galaxy sees only header material plus compute-key metadata such as key id / expiration.
 
 ##### 3. Job readiness and launch
