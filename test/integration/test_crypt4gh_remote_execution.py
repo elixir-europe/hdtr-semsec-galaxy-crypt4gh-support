@@ -38,6 +38,7 @@ from galaxy_test.base.populators import DatasetPopulator  # type: ignore[import-
 from galaxy_test.driver import integration_util  # type: ignore[import-not-found]
 
 from galaxy.tools.crypt4gh_remote_execution import CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER
+import galaxy.tools.crypt4gh_remote_execution as crypt4gh_remote_execution
 
 
 class _RecryptToJobKeyRequest(BaseModel):
@@ -941,6 +942,59 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         assert job["state"] == "error", job
         assert "minimum TTL requirement before remote call" in job.get("tool_stderr", "")
 
+    def test_remote_helper_allows_launch_when_stored_ttl_is_just_above_threshold(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+
+        warmup_expiration = datetime.now(timezone.utc) + timedelta(days=7)
+        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = warmup_expiration.isoformat()
+        sa_session.commit()
+
+        warmup_run_response = self.dataset_populator.run_tool(
+            "inheritance_simple",
+            {"input1": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        warmup_job_api_id = warmup_run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(warmup_job_api_id, assert_ok=True)
+
+        warmup_job_database_id = self._app.security.decode_id(warmup_job_api_id)
+        warmup_job = sa_session.get(model.Job, warmup_job_database_id)
+        assert warmup_job is not None
+        effective_minimum_ttl = crypt4gh_remote_execution._minimum_ttl_for_destination(
+            destination_params=dict(warmup_job.destination_params or {}),
+            fallback_minimum_ttl=timedelta(days=1),
+        )
+
+        just_above_threshold = datetime.now(timezone.utc) + effective_minimum_ttl + timedelta(minutes=10)
+        input_hda.metadata.crypt4gh_compute_keypair_expiration_date = just_above_threshold.isoformat()
+        sa_session.commit()
+
+        run_response = self.dataset_populator.run_tool(
+            "inheritance_simple",
+            {"input1": {"src": "hda", "id": input_dataset_id}},
+            history_id,
+        )
+        job_api_id = run_response["jobs"][0]["id"]
+        self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+        job = self.dataset_populator.get_job_details(job_api_id, full=True).json()
+
+        assert job["state"] == "ok", job
+
     def test_output_finalization_fails_closed_when_compute_key_expires_mid_run(self) -> None:
         history_id = self.dataset_populator.new_history()
         with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
@@ -982,6 +1036,47 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
 
         assert job["state"] == "error"
         assert "compute key expired before output finalization" in job.get("tool_stderr", "")
+
+    def test_output_finalization_succeeds_when_compute_key_remains_valid_through_completion(self) -> None:
+        history_id = self.dataset_populator.new_history()
+        with open(self.test_data_resolver.get_filename("crypt4gh/test.fastqsanger.c4gh"), "rb") as encrypted_input:
+            input_dataset = self.dataset_populator.new_dataset(
+                history_id,
+                content=encrypted_input,
+                file_type="fastqsanger.c4gh",
+                fetch_data=False,
+                wait=True,
+            )
+
+        input_dataset_id = input_dataset["id"]
+        input_hda_database_id = self._app.security.decode_id(input_dataset_id)
+        sa_session = self._app.model.session
+        input_hda = sa_session.get(model.HistoryDatasetAssociation, input_hda_database_id)
+        assert input_hda is not None
+        self._set_input_compute_metadata(input_hda)
+        sa_session.commit()
+
+        previous_expiration = self._mock_compute_recryptor_server.compute_keypair_expiration_date
+        self._mock_compute_recryptor_server.compute_keypair_expiration_date = (
+            datetime.now(timezone.utc) + timedelta(hours=2)
+        ).isoformat()
+        try:
+            run_response = self.dataset_populator.run_tool(
+                "output_format",
+                {
+                    "input_data_1": {"src": "hda", "id": input_dataset_id},
+                    "input_data_2": {"src": "hda", "id": input_dataset_id},
+                    "input_text": "not_foo_or_bar",
+                },
+                history_id,
+            )
+            job_api_id = run_response["jobs"][0]["id"]
+            self.dataset_populator.wait_for_job(job_api_id, assert_ok=True)
+            job = self.dataset_populator.get_job_details(job_api_id, full=True).json()
+        finally:
+            self._mock_compute_recryptor_server.compute_keypair_expiration_date = previous_expiration
+
+        assert job["state"] == "ok", job
 
     def test_transparent_adapted_inputs_fail_closed_when_tool_evaluation_strategy_is_local(self) -> None:
         history_id = self.dataset_populator.new_history()

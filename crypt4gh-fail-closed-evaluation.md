@@ -143,11 +143,20 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 8) Compute-key TTL / expiration window
 
 - **Gap**: Long-running jobs can approach key expiry between early TTL checks and finalization time.
-- **Mitigated?**: **Partially (improved)**. Minimum TTL checks and finalization-time expiry checks are in place; destination walltime-derived TTL now preserves the default floor instead of weakening it for short walltime declarations.
+- **Mitigated?**: **Partially (improved)**. Minimum TTL checks and finalization-time expiry checks are in place; destination walltime-derived TTL now preserves the default floor instead of weakening it for short walltime declarations, and integration coverage now exercises both threshold-near launch acceptance and finalization-time expiry fail-closed behavior.
+- **Mitigation implemented**:
+  - Added integration coverage for near-threshold launch acceptance using effective destination-derived minimum TTL plus conservative slack:
+    - `test_remote_helper_allows_launch_when_stored_ttl_is_just_above_threshold`
+  - Added integration coverage for finalization-time key validity outcomes:
+    - `test_output_finalization_fails_closed_when_compute_key_expires_mid_run`
+    - `test_output_finalization_succeeds_when_compute_key_remains_valid_through_completion`
+  - Added focused unit coverage for additional TTL boundary scenarios:
+    - `test_should_run_allows_ttl_just_above_default_boundary`
+    - `test_should_run_allows_ttl_just_above_destination_derived_boundary`
+    - `test_build_environment_rejects_exact_destination_derived_ttl_boundary_before_any_recrypt_call`
 - **Still needed**:
-  - stronger end-to-end TTL policy for long walltime jobs,
-  - additional integration tests for near-expiry and mid-run expiry scenarios across destination classes.
-- **Priority / severity**: **Medium-High**.
+  - broader destination-class parity for TTL policy under non-default scheduling topologies.
+- **Priority / severity**: **Reduced (Medium)**.
 
 ## 9) Discovery callers not consistently using `require_crypt4gh_extension`
 
@@ -168,11 +177,15 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 10) Incomplete edge-case test coverage
 
 - **Gap**: Coverage is still thin for containment safety, local evaluation behavior, Pulsar parity, traversal/symlink attacks, and TTL race windows.
-- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races, pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads under manifest-presence and scan-race conditions, and TTL boundary checks that fail closed at exact threshold to reduce race-window acceptance.
+- **Mitigated?**: **Partially (improved)**. Unit/integration coverage now includes discovered-hook working-dir-only finalization semantics, `outputs_to_working_directory` readiness requirement, explicit symlink-cleanup failure-path coverage for declared-output purge, permission-denied purge diagnostics assertions, concurrent-mutation diagnostics assertions for output payload/marker/manifest cleanup races (including extra-files directory type-flip race patterns), pre-success verifier regression coverage for plaintext/symlinked/missing/unreadable extra-files payloads under manifest-presence and scan-race conditions, and expanded TTL race-window checks (exact-threshold fail-closed plus just-above-threshold acceptance).
+- **Mitigation implemented (additional in this slice)**:
+  - Added extra-files directory race-pattern stress coverage for type-flip concurrent mutation during purge:
+    - `test_finalize_declared_outputs_logs_concurrent_mutation_when_extra_files_directory_type_flips_during_purge`
+  - Hardened purge diagnostics classification so `NotADirectoryError`/`IsADirectoryError` path-type races are reported as concurrent mutation diagnostics rather than generic cleanup failures.
+  - Added additional TTL race-window scenarios covering both acceptance and rejection boundaries in unit + integration paths.
 - **Still needed**:
-  - add broader concurrent-mutation cleanup stress tests for extra-files directory race patterns,
   - add Pulsar branch parity tests,
-  - add additional TTL race-window scenarios across destination/integration paths.
+  - extend destination-class TTL race-window integration checks beyond current fixture topology.
 - **Priority / severity**: **High**.
 
 ## 11) Dynamic datatype registration warning for non-preregistered `*.c4gh` variants
@@ -492,3 +505,17 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: object-store dataset destinations are expected outside the job working directory in supported deployments; fail-closed controls must target plaintext provenance specifically, not legitimate final encrypted destinations.
 - **Security impact**: positive. Plaintext paths now fail closed when outside declared plaintext roots, while valid object-store encrypted output destinations remain accepted.
 - **Follow-up**: add integration coverage for destination-specific object-store topologies and Pulsar parity for `plaintext_root_paths` propagation.
+
+### 2026-07-19 — Gap #5 add best-effort purge stress diagnostics and partial-outcome counters
+
+- **Decision**: extend best-effort purge fallback reporting with explicit partial-outcome counters and add stress tests for multi-path concurrent mutation and permission-denied purge outcomes.
+- **Why**: single-path diagnostic lines are useful but do not summarize aggregate purge posture under hostile runtime behavior; operators need one concise signal describing what was removed, skipped, raced, or failed.
+- **Security impact**: positive. Fail-closed behavior is preserved while post-failure purge observability improves, reducing ambiguity during incident triage.
+- **Follow-up**: broaden mount/filesystem-behavior stress coverage where purge semantics differ across runtime environments.
+
+### 2026-07-19 — Gap #10/#8 expand race-window and extra-files race-pattern coverage
+
+- **Decision**: add targeted coverage for extra-files directory type-flip cleanup races and TTL boundary acceptance/rejection scenarios in both unit and integration paths, and classify path-type race `OSError`s as concurrent-mutation diagnostics.
+- **Why**: previously covered races focused on missing-path mutation; type-flip races and just-above-threshold TTL acceptance were underrepresented despite being realistic in concurrent filesystems and scheduler timing.
+- **Security impact**: positive. Improves confidence that fail-closed controls hold at TTL boundaries and under additional extra-files cleanup race patterns without broadening execution surface.
+- **Follow-up**: continue with Pulsar parity and broader destination-class TTL integration coverage.

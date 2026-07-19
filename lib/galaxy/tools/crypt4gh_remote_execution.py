@@ -17,6 +17,7 @@ from datetime import (
     timedelta,
     timezone,
 )
+import errno
 from pathlib import Path
 from urllib.parse import urlsplit
 from collections.abc import (
@@ -1350,6 +1351,25 @@ def _purge_output_targets_after_finalization_failure(
             except FileNotFoundError as exc:
                 log.warning(
                     "Observed concurrent mutation while removing plaintext extra_files candidate %s after Crypt4GH finalization failure (%s: %s)",
+                    extra_files_output_path,
+                    exc.__class__.__name__,
+                    exc,
+                )
+            except OSError as exc:
+                if isinstance(exc, (NotADirectoryError, IsADirectoryError, FileNotFoundError)) or exc.errno in (
+                    errno.ENOTDIR,
+                    errno.EISDIR,
+                    errno.ENOENT,
+                ):
+                    log.warning(
+                        "Observed concurrent mutation while removing plaintext extra_files candidate %s after Crypt4GH finalization failure (%s: %s)",
+                        extra_files_output_path,
+                        exc.__class__.__name__,
+                        exc,
+                    )
+                    continue
+                log.exception(
+                    "Failed to remove plaintext extra_files candidate %s after Crypt4GH finalization failure (%s: %s)",
                     extra_files_output_path,
                     exc.__class__.__name__,
                     exc,
