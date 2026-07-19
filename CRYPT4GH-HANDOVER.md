@@ -920,7 +920,7 @@ Throughout the history, datasets are tagged with `Recrypted_for_compute` and `cn
 - **User-side recryptor** → **compute-side recryptor** at `https://galaxy.semsec.bsc.es:8443`.
 - The UI key icon triggers a user-side recrypt step that talks to the compute-side recryptor over this TLS connection.
 - Galaxy `remote_eval` code talks only to the compute-side recryptor; it never contacts the user-side recryptor or handles user private keys.
-- Across those two service boundaries, encrypted payloads, Crypt4GH headers, and compute-key metadata/IDs can traverse the connections; plaintext payload bodies and user private keys do not.
+- Across those two service boundaries, Crypt4GH headers and compute-key metadata/IDs can traverse the recryptor connections; encrypted payload bodies, plaintext payload bodies, and user private keys do not.
 - The compute key ID `cnk:38al0qyb` visible in dataset tags across the history confirms consistent compute-key binding.
 
 #### Future work for the demo environment
