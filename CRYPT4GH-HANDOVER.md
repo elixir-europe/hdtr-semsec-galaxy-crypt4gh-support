@@ -116,9 +116,9 @@ Important notes:
 
 - `enable_crypt4gh_remote_execution_staging` is the current runtime gate for the remote Crypt4GH path and requires `enable_crypt4gh_transparent_input_matching = true`.
 - `crypt4gh_reencryption_service_url` is the current in-repo config key and refers to compute-side recryptor B.
-- `metadata_strategy: extended` is required for this execution model.
-- `outputs_to_working_directory: true` is required for the current fail-closed path.
-- `tool_evaluation_strategy: remote` is required; local evaluation is intentionally rejected for this Crypt4GH flow.
+- `metadata_strategy: extended` is required for the supported remote Crypt4GH execution path.
+- `outputs_to_working_directory: true` is required for the supported remote Crypt4GH execution path.
+- `tool_evaluation_strategy: remote` is required for the supported remote Crypt4GH execution path; local evaluation is intentionally rejected for this Crypt4GH flow.
 - Older docs and local examples in this tree may still show `enable_crypt4gh_transparent_staging`; treat that as historical naming, not the current split flag surface.
 
 ### 4. Job destination expectations
@@ -417,7 +417,7 @@ This separate worktree and branch contains the Pulsar-specific command assembly 
 Summary of the Pulsar branch:
 
 - files changed: `lib/galaxy/jobs/command_factory.py`, `test/unit/app/jobs/test_command_factory.py`, plus branch metadata context;
-- targeted parity unit tests were reported as passing in the branch-local handoff, but this handover does not independently restate an exact count here;
+- targeted parity unit tests exist for this branch, but this handover does not independently restate a verified pass count here;
 - purpose: make Pulsar `remote_command_line` assembly match the non-Pulsar wrapper and failure-gating intent more closely.
 
 The key Pulsar fixes were:
@@ -920,7 +920,7 @@ Throughout the history, datasets are tagged with `Recrypted_for_compute` and `cn
 - **User-side recryptor** → **compute-side recryptor** at `https://galaxy.semsec.bsc.es:8443`.
 - The UI key icon triggers a user-side recrypt step that talks to the compute-side recryptor over this TLS connection.
 - Galaxy `remote_eval` code talks only to the compute-side recryptor; it never contacts the user-side recryptor or handles user private keys.
-- No private user keys or compute key materials were shared between the two service boundaries; only encrypted content traverses the two trusted connections.
+- Across those two service boundaries, encrypted payloads, Crypt4GH headers, and compute-key metadata/IDs can traverse the connections; plaintext payload bodies and user private keys do not.
 - The compute key ID `cnk:38al0qyb` visible in dataset tags across the history confirms consistent compute-key binding.
 
 #### Future work for the demo environment
