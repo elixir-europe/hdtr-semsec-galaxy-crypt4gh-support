@@ -742,3 +742,11 @@ Throughout the history, datasets are tagged with `Recrypted_for_compute` and `cn
 - The two TLS connections (user→compute recryptor and Galaxy remote_eval→compute recryptor) should be hardened with authentication and authorization infrastructure (AAI)
 - Proper key management lifecycles (rotation, revocation, auditing) remain to be implemented for production deployments
 - The current demo setup trusts both connections at the network level; production environments should add token-based or certificate-based auth per connection
+
+### Coverage notes
+
+The demo history exercises the core encryption → analysis → output → recryption loop for simple outputs and collection discovery paths. The following areas have NOT been manually tested in this demo:
+
+- Tools that produce extra-files outputs
+- Dataset discovery pathways beyond the `split_file_to_collection` pattern
+- Workflow execution (all steps were run individually, not inside a Galaxy workflow)
