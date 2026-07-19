@@ -84,8 +84,9 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 
 - **Gap**: Cleanup/finalization wrapping may not execute identically across Pulsar-oriented command assembly paths.
 - **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, and preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, but parity across all Pulsar branches is not fully verified.
+- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation and keeps downstream command-builder steps under a grouped success gate after the remote-eval/tool-script wrapper chain (`&& ( ... )`), reducing sequencing divergence from non-Pulsar assembly. Full parity across all Pulsar branches is still not fully verified.
 - **Still needed**:
-  - targeted Pulsar branch tests asserting wrapper + postrun + cleanup execution ordering,
+  - broader targeted Pulsar branch tests asserting wrapper + postrun + cleanup execution ordering,
   - verification that failure semantics match non-Pulsar remote path.
 - **Priority / severity**: **High**.
 
@@ -529,3 +530,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: `OSError` list races are a realistic filesystem concurrency mode and should preserve the same fail-open/fail-closed split already defined for required extension contexts.
 - **Security impact**: positive. Reduces ambiguity in race handling semantics for extension resolution under marker-directory mutation.
 - **Follow-up**: extend integration-level race simulations where feasible.
+
+### 2026-07-19 — Gap #4 add Pulsar command-factory success-gate regression coverage
+
+- **Decision**: add unit parity coverage for `for_pulsar` remote command assembly and tighten the builder logic so Pulsar remote preamble + `bash ../tool_script.sh` keeps follow-up command-builder output under grouped success gating (`&& ( ... )`), matching non-Pulsar failure-propagation structure.
+- **Why**: previously, Pulsar assembly could concatenate directly into downstream command text (`... && bash ../tool_script.sh cd working; ...`), weakening sequencing determinism and risking divergence in fail-closed flow.
+- **Security impact**: positive. Improves command-chain determinism and reduces risk that Pulsar follow-up steps execute outside intended wrapper success gating.
+- **Follow-up**: extend parity coverage to more Pulsar-specific execution topologies and explicit cleanup/postrun failure propagation checks.
