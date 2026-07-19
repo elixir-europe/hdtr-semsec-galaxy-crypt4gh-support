@@ -173,6 +173,45 @@ class TestCommandFactory(TestCase):
         assert "&& cd working;" not in command
         assert "&& ( cd working;" in command
 
+    def test_remote_tool_eval_for_pulsar_preserves_wrapper_then_tool_script_then_followup_order(self):
+        self.include_work_dir_outputs = False
+        self.job_wrapper.remote_command_line = True
+
+        command = self.__command(
+            remote_command_params={
+                "pulsar_version": "1.0.0",
+                "script_directory": "/pulsar/scripts",
+            }
+        )
+
+        wrapper_token = "remote_tool_eval.py >> outputs/tool_stdout 2>> outputs/tool_stderr"
+        pulsar_tool_script_token = "&& /bin/sh /pulsar/scripts/tool_script.sh"
+        followup_chain_token = "&& ( cd working;"
+
+        assert wrapper_token in command
+        assert pulsar_tool_script_token in command
+        assert followup_chain_token in command
+        assert command.index(wrapper_token) < command.index(pulsar_tool_script_token)
+        assert command.index(pulsar_tool_script_token) < command.index(followup_chain_token)
+
+    def test_remote_tool_eval_for_pulsar_uses_non_pulsar_failure_gating_shape_for_followup_chain(self):
+        self.include_work_dir_outputs = False
+        self.job_wrapper.remote_command_line = True
+
+        non_pulsar_command = self.__command()
+        pulsar_command = self.__command(
+            remote_command_params={
+                "pulsar_version": "1.0.0",
+                "script_directory": "/pulsar/scripts",
+            }
+        )
+
+        wrapper_token = "remote_tool_eval.py >> outputs/tool_stdout 2>> outputs/tool_stderr"
+        assert f"{wrapper_token} && ( cd working;" in non_pulsar_command
+        assert f"{wrapper_token} && /bin/sh /pulsar/scripts/tool_script.sh && ( cd working;" in pulsar_command
+        assert f"{wrapper_token}; cd working;" not in non_pulsar_command
+        assert f"{wrapper_token}; /bin/sh /pulsar/scripts/tool_script.sh" not in pulsar_command
+
     def test_workdir_outputs(self):
         self.include_work_dir_outputs = True
         self.workdir_outputs = [("foo", "bar")]
