@@ -472,6 +472,24 @@ def test_resolve_discovered_extension_requires_crypt4gh_when_marker_dir_oserror_
     assert registry.created_from == ["tabular"]
 
 
+def test_resolve_discovered_extension_uses_designation_map_marker_evidence_without_required_context(
+    tmp_path, monkeypatch
+):
+    registry = _RegistryForExtensionResolution()
+    marker_dir = tmp_path / "job" / "_c4gh_stage" / "outputs"
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    (marker_dir / "discovered_designations.json").write_text("{}")
+    monkeypatch.setattr("galaxy.model._get_datatypes_registry", lambda: registry)
+
+    resolved = _resolve_discovered_crypt4gh_extension(
+        ext="tabular",
+        job_working_directory=str(tmp_path / "job"),
+    )
+
+    assert resolved == "tabular.c4gh"
+    assert registry.created_from == ["tabular"]
+
+
 def test_set_datasets_metadata_can_require_crypt4gh_extension_resolution(monkeypatch):
     class _PrimaryData:
         states = type("States", (), {"OK": "ok", "FAILED_METADATA": "failed_metadata"})

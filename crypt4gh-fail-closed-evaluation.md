@@ -529,3 +529,14 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: `OSError` list races are a realistic filesystem concurrency mode and should preserve the same fail-open/fail-closed split already defined for required extension contexts.
 - **Security impact**: positive. Reduces ambiguity in race handling semantics for extension resolution under marker-directory mutation.
 - **Follow-up**: extend integration-level race simulations where feasible.
+
+### 2026-07-19 — Coverage follow-up: practical non-Pulsar additions for gaps #1/#2/#11/#12
+
+- **Decision**: add practical, low-risk regression coverage for non-Pulsar follow-up gaps without introducing new architecture changes.
+- **What was added**:
+  - Gap #1 destination-matrix edge: blank destination `tool_evaluation_strategy` now covered for both helper gating and readiness checks, confirming fallback to global `tool_evaluation_strategy=remote` when configured.
+  - Gap #2 race simulation breadth: marker evidence via `discovered_designations.json` is now explicitly covered as sufficient evidence for non-required discovered extension promotion.
+  - Gap #12 modify-input metadata behavior: `crypt4gh_clear_compute_keypair=True` with an explicit replacement header is now covered to ensure clear-mode still preserves the provided metadata header and clears compute-keypair fields.
+- **Why**: these paths were practical to validate in fast unit scope and reduce ambiguity in behavior that can impact fail-closed enforcement consistency.
+- **Security impact**: positive. Improves confidence around edge-case fallback semantics and metadata reset behavior without broadening runtime behavior.
+- **Follow-up**: keep integration-level destination topology/race simulation coverage expansion for gaps #1/#2 when practical.
