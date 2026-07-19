@@ -363,9 +363,8 @@ Different output classes need slightly different handling, but they all converge
 - The `/recrypt_header_to_user_key` request includes:
   - the temporary compute-encrypted header,
   - and the compute keypair id.
-- The `/recrypt_header_to_user_key` response returns:
-  - a header recrypted for the stored user public key,
-  - plus the same compute keypair id / expiration metadata.
+- Galaxy runtime currently uses only the `crypt4gh_header` field from the `/recrypt_header_to_user_key` response.
+- The service contract also returns the compute keypair id / expiration metadata, but Galaxy does not currently consume those fields on this path.
 - Recryptor B returns a user-readable replacement header.
 - Galaxy rewrites the final output file as:
   - returned header from recryptor B,
