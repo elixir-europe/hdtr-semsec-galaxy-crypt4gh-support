@@ -101,10 +101,13 @@ It summarizes current fail-closed behavior and known remaining gaps across:
     - `test_finalize_command_best_effort_purge_unlinks_extra_files_directory_symlink_on_import_failure`
     - `test_finalize_command_best_effort_purge_logs_concurrent_mutation_for_unlink_race`
     - `test_finalize_command_best_effort_purge_logs_permission_errors_without_masking_finalize_failure`
+  - Best-effort postrun purge now emits a partial-outcome summary when any purge candidate is skipped/failed/raced, with explicit counters for removed/missing/outside-root/concurrent-mutation/failed outcomes.
+  - Added stress coverage for multi-path race and permission-denied partial outcomes:
+    - `test_finalize_command_best_effort_purge_reports_partial_outcome_for_concurrent_mutation_stress`
+    - `test_finalize_command_best_effort_purge_reports_partial_outcome_for_permission_denied_stress`
 - **Still needed**:
-  - permission-denied and concurrent-mutation stress coverage,
-  - clearer operator diagnostics for partial purge outcomes under hostile runtime conditions.
-- **Priority / severity**: **Reduced (Medium; permission/race follow-up remains)**.
+  - mount-behavior and cross-filesystem edge coverage for best-effort purge paths.
+- **Priority / severity**: **Reduced (Medium-Low; mount/filesystem follow-up remains)**.
 
 ## 6) Output written outside job working directory
 
