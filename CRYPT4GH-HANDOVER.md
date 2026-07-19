@@ -6,6 +6,8 @@ This handover covers the full Crypt4GH story on this branch: encrypted datatype 
 
 The supported setup does **not** require sharing private keys with Galaxy at all: not user-side private keys, and not the temporary compute-side private keys created for the recrypt workflow. Public keys are exchanged where needed.
 
+Public-key exchange is a necessary part of the protocol, not an implementation accident. Crypt4GH uses Curve25519/X25519 key agreement, so the sender's public key must be present in the Crypt4GH header packets that let the recipient derive the shared secret needed to decrypt the header.
+
 If you want a live example before reading code, a public Galaxy history is available at:
 [https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo](https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo)
 
@@ -102,6 +104,13 @@ In plain terms:
 - Local tool evaluation is intentionally not part of the supported Crypt4GH flow.
 
 No step in this setup requires Galaxy to receive or persist user private keys or the temporary compute-side private keys minted for compute use.
+
+What does cross service boundaries are specific public keys and Crypt4GH headers:
+
+- the user public key is used when recryptor-side services need to target data back to the user context,
+- the compute public key is returned to Galaxy so Galaxy can locally encrypt output payloads to compute context,
+- the per-job public key is sent from Galaxy to compute-side recryptor B so input headers can be rewritten for one running job,
+- and the recryptor APIs operate on Crypt4GH headers plus key ids/metadata rather than on private keys or plaintext payload bodies.
 
 ### 2. Recryptor A vs recryptor B
 
@@ -274,6 +283,15 @@ This is the high-level path the code implements today.
 | **Compute key pair** | Created by compute-side recryptor B for a user and time slice | Compute-side recryptor storage only | Temporary, bounded by the compute-key expiration window | The compute private key stays inside recryptor B; the compute public key is what Galaxy and related flows use |
 | **Job key pair** | Created per job inside the runtime helper | In-memory during the running job | Per job, never persisted to disk | The job public key is sent to recryptor B; the job private key stays in-memory only for the running job |
 
+##### Key exchange at each recryptor API step
+
+| API step | What Galaxy / UI sends | What comes back | Why those public keys must cross |
+| --- | --- | --- | --- |
+| **UI-side `recrypt_header` call** | `crypt4gh_header` only in the checked-in `DatasetActions.vue` flow | Returned metadata merged onto the copied dataset, including `crypt4gh_compute_keypair_id` | The checked-in browser call is header-only from the client side. The surrounding user-side recryptor A flow is responsible for whatever user/compute public-key context it needs behind that endpoint. |
+| **`POST /get_compute_key_info`** | `crypt4gh_user_public_key` | `crypt4gh_compute_public_key`, `crypt4gh_compute_keypair_id`, `crypt4gh_compute_keypair_expiration_date` | Compute-side recryptor B needs the user public key so it can associate or mint a compute-key context for that user; callers need the compute public key/id/expiry so later recrypt and output-encryption steps can target the right compute context. |
+| **`POST /recrypt_header_to_job_key`** | `crypt4gh_header`, `crypt4gh_compute_keypair_id`, `crypt4gh_job_public_key` | recrypted `crypt4gh_header`, `crypt4gh_compute_public_key`, `crypt4gh_compute_keypair_id`, `crypt4gh_compute_keypair_expiration_date` | Recryptor B uses the stored compute private key identified by the compute keypair id to decrypt the incoming header context and rewrap it for the per-job public key. Galaxy also needs the returned compute public key for later output encryption. |
+| **`POST /recrypt_header_to_user_key`** | `crypt4gh_header`, `crypt4gh_compute_keypair_id` | recrypted `crypt4gh_header`, `crypt4gh_compute_keypair_id`, `crypt4gh_compute_keypair_expiration_date` | Recryptor B already knows the stored user public key associated with the compute keypair id, so Galaxy only needs to send the encrypted header plus that id. B uses the compute private key and stored user public key to rewrite the header for the user's context. |
+
 ##### 1. Data ingestion and dataset typing
 
 - A user uploads or fetches a `.c4gh` file.
@@ -284,13 +302,17 @@ This is the high-level path the code implements today.
 ##### 2. User-side recrypt for compute use
 
 - The user clicks the history recrypt action in the Galaxy client.
-- The browser-side flow sends the stored header to recryptor A.
-- Recryptor A obtains compute-side key context (via the surrounding A/B workflow) and prepares a compute-readable header.
+- The checked-in browser-side flow sends only the stored header to `https://localhost:61357/recrypt_header`.
+- Around that header-only call, recryptor A is responsible for the user-side key exchange needed to prepare compute-readable headers.
+- In the surrounding live/manual flow, the compute-side key lookup step exchanges the **user public key** for a **compute public key**, **compute key id**, and **compute-key expiration timestamp** through `POST /get_compute_key_info`.
+- Recryptor A then prepares a compute-readable header using that compute-side public-key context.
 - Galaxy stores the returned metadata on a copied dataset, including the compute key id / expiration information needed by later runtime checks.
 - At this point the relevant keys are:
   - the long-lived user private key stays user-side, while the user public key can be shared with recryptor-side services,
   - the temporary compute private key lives only with compute-side recryptor B, while the compute public key is shared as needed,
   - and Galaxy sees only header material plus compute-key metadata such as key id / expiration.
+
+**Key exchange at this step:** user public key out to the recryptor-side flow; compute public key/id/expiry back; no user private key crosses.
 
 ##### 3. Job readiness and launch
 
@@ -310,7 +332,18 @@ This is the high-level path the code implements today.
 - The Crypt4GH helper prepares `_crypt/inputs/.../plaintext` material under the job working directory rather than relying on the older Galaxy-side staging model.
 - The helper generates a per-job key pair in memory; the job public key is sent to recryptor B, while the per-job private key is retained only as Python bytes across helper functions, never written to disk or sent over the network.
 - Galaxy calls recryptor B to rewrite headers for job-local compute use through `POST /recrypt_header_to_job_key`.
+- That request sends:
+  - the input dataset's stored `crypt4gh_header`,
+  - the input dataset's `crypt4gh_compute_keypair_id`,
+  - and the per-job public key.
+- The response returns:
+  - a header recrypted for the per-job public key,
+  - the compute public key,
+  - the compute keypair id,
+  - and the compute-key expiration timestamp.
 - The actual tool then runs against plaintext-compatible paths inside the compute-local workspace.
+
+**Key exchange at this step:** job public key out; compute public key/id/expiry back; no job private key or compute private key crosses.
 
 ##### 5. Output handling by output class
 
@@ -327,11 +360,19 @@ Different output classes need slightly different handling, but they all converge
 
 - Galaxy encrypts plaintext output locally to the compute public key.
 - It then extracts only the Crypt4GH header from that intermediate encrypted file and sends only that header to compute-side recryptor B via `POST /recrypt_header_to_user_key`.
+- The `/recrypt_header_to_user_key` request includes:
+  - the temporary compute-encrypted header,
+  - and the compute keypair id.
+- The `/recrypt_header_to_user_key` response returns:
+  - a header recrypted for the stored user public key,
+  - plus the same compute keypair id / expiration metadata.
 - Recryptor B returns a user-readable replacement header.
 - Galaxy rewrites the final output file as:
   - returned header from recryptor B,
   - plus the unchanged encrypted body from the compute-encrypted intermediate file.
 - This means output return, like input preparation, stays header-only across the recryptor boundary; Galaxy never needs the user private key and does not send plaintext output bodies to recryptor B.
+
+**Key exchange at this step:** Galaxy uses the compute public key locally for payload encryption, then sends only the encrypted header plus compute keypair id to B; B uses its stored compute private key plus stored user public key to return a user-readable header; no private key crosses.
 
 ##### Output types and plaintext/encryption rules
 
