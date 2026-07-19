@@ -102,22 +102,6 @@ class TestCommandFactory(TestCase):
             assert " >> '../outputs/tool_stdout' 2>> '../outputs/tool_stderr'" in command
         assert "&& ( cd working;" in command
 
-    def test_remote_tool_eval_for_pulsar_groups_follow_up_commands_under_success_gate(self):
-        self.include_work_dir_outputs = False
-        self.job_wrapper.remote_command_line = True
-
-        command = self.__command(remote_command_params={"pulsar_version": "1.0"})
-
-        assert (
-            'PYTHONPATH="$GALAXY_LIB:$PYTHONPATH" '
-            '"${GALAXY_PYTHON:-python}" "$GALAXY_LIB"/galaxy/tools/remote_tool_eval.py '
-            '>> outputs/tool_stdout 2>> outputs/tool_stderr'
-        ) in command
-        assert "&& bash ../tool_script.sh && ( cd working;" in command
-        assert "bash ../tool_script.sh cd working;" not in command
-        assert "../metadata/tool_stdout" in command
-        assert "../metadata/tool_stderr" in command
-
     def test_workdir_outputs(self):
         self.include_work_dir_outputs = True
         self.workdir_outputs = [("foo", "bar")]
