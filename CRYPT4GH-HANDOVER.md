@@ -417,7 +417,7 @@ This separate worktree and branch contains the Pulsar-specific command assembly 
 Summary of the Pulsar branch:
 
 - files changed: `lib/galaxy/jobs/command_factory.py`, `test/unit/app/jobs/test_command_factory.py`, plus branch metadata context;
-- targeted parity unit tests exist for this branch, but this handover does not independently restate a verified pass count here;
+- targeted parity unit tests exist for this branch, but this handover does not independently restate a verified run result or pass count here;
 - purpose: make Pulsar `remote_command_line` assembly match the non-Pulsar wrapper and failure-gating intent more closely.
 
 The key Pulsar fixes were:
