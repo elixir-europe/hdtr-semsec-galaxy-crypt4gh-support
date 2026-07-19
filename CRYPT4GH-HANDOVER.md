@@ -686,3 +686,59 @@ For the **non-Pulsar** scope, this branch is in a substantially better state tha
 - and the architectural direction is more coherent with the compute-side trust model.
 
 The main remaining caution is not “is the branch useful?” but rather “how should it now be reviewed and split?” The best near-term split candidates are the general object-wrapper fix, any reusable containment/diagnostic helpers, and the isolated Pulsar parity branch.
+
+## Published demo history
+
+A publicly shared history is available at:  
+[https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo](https://galaxy.semsec.bsc.es/u/sveinugu/h/handoff-demo)
+
+The history (id `eaa9b06464bd346f`, Galaxy 26.0) contains 25 items and demonstrates the complete Crypt4GH encryption → analysis → output encryption → recryption flow with publicly viewable datasets.
+
+### History summary
+
+The starting point is a single Crypt4GH-encrypted FASTQsanger file uploaded via data fetch:
+
+- **HID 1**: `1.fastqsanger.c4gh` — the initial encrypted input dataset
+
+From there, two parallel analysis tracks were run against the compute-recrypted copies:
+
+**Branch A — simple output (Select first):**
+1. `Show beginning1` on the recrypted input (HID 4) → produced `fastqsanger.c4gh` output
+2. `Show beginning1` on the FastQC RawData txt.c4gh output (HID 24) → produced `txt.c4gh`
+3. Both outputs re-recrypted via UI key icon (HID 14, 25)
+
+**Branch B — split + FastQC (collection discovery path):**
+1. `split_file_to_collection` (toolshed `0.5.2`) on recrypted input (HID 8, 19) → collections of `fastq.c4gh` elements
+2. `FastQC` (toolshed `0.74+galaxy1`) on the recrypted input (HID 9, 10) → `html.c4gh` + `txt.c4gh` outputs
+3. Split outputs and FastQC outputs re-recrypted via UI key icon (HID 15, 16, 22, 23)
+
+### Recryption pattern
+
+Throughout the history, datasets are tagged with `Recrypted_for_compute` and `cnk:38al0qyb` (the compute key ID). The pattern:
+
+1. A job produces an encrypted output (`.c4gh` extension)
+2. The user clicks the UI key icon "Recrypt Crypt4GH-encrypted dataset" to obtain a compute-recrypted copy
+3. The recrypted copy carries the same dataset content but with headers recrypted to the compute-side key context
+4. Both original and recrypted copies are preserved in the history — the recrypted copy is the one usable for further compute-side operations
+
+### Tools used
+
+- **Show beginning1** (`Show beginning1`) — Galaxy built-in text selection/head tool
+- **FastQC** (`toolshed.g2.bx.psu.edu/repos/devteam/fastqc/fastqc/0.74+galaxy1`) — quality control
+- **Split file to collection** (`toolshed.g2.bx.psu.edu/repos/bgruening/split_file_to_collection/split_file_to_collection/0.5.2`) — collection discovery
+- **__DATA_FETCH__** — file upload
+- **__SET_METADATA__** — metadata management (applied during recryption and dataset operations)
+
+### Architecture notes
+
+- **User-side recryptor** → **compute-side recryptor** at `https://galaxy.semsec.bsc.es:8443`
+- The UI key icon triggers a user-side recryption that talks to the compute-side recryptor over this TLS connection
+- Galaxy `remote_eval` code talks only to the compute-side recryptor — it never contacts the user-side recryptor or handles user private keys
+- No private user keys or compute key materials were shared between the two service boundaries — only encrypted content traverses the two trusted connections
+- The compute key ID `cnk:38al0qyb` visible in dataset tags across the history confirms consistent compute-key binding
+
+### Future work (connections and key management)
+
+- The two TLS connections (user→compute recryptor and Galaxy remote_eval→compute recryptor) should be hardened with authentication and authorization infrastructure (AAI)
+- Proper key management lifecycles (rotation, revocation, auditing) remain to be implemented for production deployments
+- The current demo setup trusts both connections at the network level; production environments should add token-based or certificate-based auth per connection
