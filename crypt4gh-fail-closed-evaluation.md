@@ -83,10 +83,10 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 4) Pulsar / `for_pulsar` branch divergence
 
 - **Gap**: Cleanup/finalization wrapping may not execute identically across Pulsar-oriented command assembly paths.
-- **Mitigated?**: **Partially (improved)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, executes `tool_script.sh` with the configured job shell (with `/bin/sh` fallback when shell is unset/`none`) instead of hard-coded `bash`, invokes that script using the Pulsar-provided script directory path when available (fallback `../tool_script.sh`), and now has targeted unit parity coverage asserting wrapper → Pulsar tool-script wrapper → follow-up command ordering plus non-Pulsar-equivalent failure-gating shape.
+- **Mitigated?**: **Yes (mitigated for scoped coverage)**. Core wrapper exists; Pulsar branch command assembly now enforces explicit shell-command separation, groups the downstream command chain under a single gated segment, preserves `&&`-gated follow-up sequencing between remote-eval wrapper invocation and tool-script execution, executes `tool_script.sh` with the configured job shell (with `/bin/sh` fallback when shell is unset/`none`) instead of hard-coded `bash`, invokes that script using the Pulsar-provided script directory path when available (fallback `../tool_script.sh`), with targeted unit parity tests now asserting wrapper ordering, follow-up gating, and non-Pulsar-equivalent failure-propagation shape.
 - **Still needed**:
   - broader integration/runtime parity coverage across additional Pulsar destination variants.
-- **Priority / severity**: **High**.
+- **Priority / severity**: **Reduced (Medium; broader integration parity follow-up)**.
 
 ## 5) Symlink / race / permission failures in best-effort purge
 
