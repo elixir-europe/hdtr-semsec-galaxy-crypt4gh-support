@@ -1319,6 +1319,9 @@ def test_collect_declared_targets_prefers_false_path_and_tracks_real_path(tmp_pa
         str(tmp_path.resolve()),
         str(real_path.parent.resolve()),
     ]
+    assert targets[0]["plaintext_root_paths"] == [
+        str(tmp_path.resolve()),
+    ]
 
 
 def test_collect_declared_targets_does_not_emit_debug_resolution_payload_by_default(tmp_path, capsys):
@@ -2914,7 +2917,7 @@ def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_outp
 
     def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
         del compute_public_key
-        Path(compute_encrypted_path).write_bytes(Path(plaintext_path).read_bytes())
+        Path(compute_encrypted_path).write_bytes(b"crypt4gh" + Path(plaintext_path).read_bytes())
 
     def _fake_rewrite_output_header_to_user_key(
         *,
@@ -2991,7 +2994,7 @@ def test_finalize_declared_outputs_logs_concurrent_mutation_diagnostics_for_mark
 
     def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
         del compute_public_key
-        Path(compute_encrypted_path).write_bytes(Path(plaintext_path).read_bytes())
+        Path(compute_encrypted_path).write_bytes(b"crypt4gh" + Path(plaintext_path).read_bytes())
 
     def _fake_rewrite_output_header_to_user_key(
         *,
@@ -3192,6 +3195,116 @@ def test_finalize_declared_outputs_rejects_targets_outside_allowed_roots(tmp_pat
         )
 
     assert unsafe_output_path.exists()
+
+
+def test_finalize_declared_outputs_rejects_plaintext_path_outside_plaintext_root_even_when_output_paths_allowed(
+    tmp_path,
+    monkeypatch,
+):
+    working_root = tmp_path / "job_work"
+    object_store_root = tmp_path / "object_store"
+    output_path = working_root / "working" / "1"
+    dataset_output_path = object_store_root / "dataset_1.dat"
+    plaintext_path = object_store_root / "_crypt" / "outputs" / "ds_1" / "plaintext"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    object_store_root.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    marker_path = working_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"
+
+    def _encrypt_should_not_run(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del plaintext_path
+        del compute_encrypted_path
+        del compute_public_key
+        raise AssertionError("encryption should not run when plaintext_path is outside plaintext root")
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _encrypt_should_not_run,
+    )
+
+    with pytest.raises(Crypt4GHRemoteExecutionError, match="finalize plaintext_path path is outside allowed roots"):
+        finalize_declared_crypt4gh_outputs(
+            output_targets=[
+                {
+                    "output_path": str(output_path),
+                    "dataset_output_path": str(dataset_output_path),
+                    "plaintext_path": str(plaintext_path),
+                    "plaintext_root_path": str(working_root),
+                    "encrypted_marker_path": str(marker_path),
+                    "encrypted_ext": "tabular.c4gh",
+                    "allowed_root_paths": [str(working_root), str(object_store_root)],
+                    "plaintext_root_paths": [str(working_root)],
+                }
+            ],
+            reencryption_service_url="http://example.invalid",
+            compute_public_key="unused",
+            compute_keypair_id="unused",
+        )
+
+
+def test_finalize_declared_outputs_allows_dataset_output_path_outside_working_root_with_plaintext_root_constrained(
+    tmp_path,
+    monkeypatch,
+):
+    working_root = tmp_path / "job_work"
+    object_store_root = tmp_path / "object_store"
+    output_path = working_root / "working" / "1"
+    dataset_output_path = object_store_root / "dataset_1.dat"
+    plaintext_path = working_root / "_crypt" / "outputs" / "ds_1" / "plaintext"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    object_store_root.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("plain\n")
+
+    marker_path = working_root / "_c4gh_stage" / "outputs" / "ds_1.encrypted"
+
+    def _fake_encrypt_plaintext_to_compute_key(*, plaintext_path, compute_encrypted_path, compute_public_key):
+        del compute_public_key
+        Path(compute_encrypted_path).write_bytes(b"crypt4gh" + Path(plaintext_path).read_bytes())
+
+    def _fake_rewrite_output_header_to_user_key(
+        *,
+        compute_encrypted_path,
+        final_output_tmp_path,
+        reencryption_service_url,
+        compute_keypair_id,
+    ):
+        del reencryption_service_url
+        del compute_keypair_id
+        Path(final_output_tmp_path).write_bytes(Path(compute_encrypted_path).read_bytes())
+
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._encrypt_plaintext_to_compute_key",
+        _fake_encrypt_plaintext_to_compute_key,
+    )
+    monkeypatch.setattr(
+        "galaxy.tools.crypt4gh_remote_execution._rewrite_output_header_to_user_key",
+        _fake_rewrite_output_header_to_user_key,
+    )
+
+    finalize_declared_crypt4gh_outputs(
+        output_targets=[
+            {
+                "output_path": str(output_path),
+                "dataset_output_path": str(dataset_output_path),
+                "plaintext_path": str(plaintext_path),
+                "encrypted_marker_path": str(marker_path),
+                "encrypted_ext": "tabular.c4gh",
+                "allowed_root_paths": [str(working_root), str(object_store_root)],
+                "plaintext_root_paths": [str(working_root)],
+            }
+        ],
+        reencryption_service_url="http://example.invalid",
+        compute_public_key="unused",
+        compute_keypair_id="unused",
+    )
+
+    assert output_path.exists()
+    with output_path.open("rb") as encrypted_stream:
+        assert encrypted_stream.read(8) == b"crypt4gh"
+    assert not dataset_output_path.exists()
 
 
 def test_finalize_declared_outputs_rejects_traversal_output_target_via_parent_segments(tmp_path, monkeypatch):

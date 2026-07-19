@@ -109,16 +109,19 @@ It summarizes current fail-closed behavior and known remaining gaps across:
 ## 6) Output written outside job working directory
 
 - **Gap**: Tool/postrun may still write plaintext outside tracked target set; finalize/purge routines handle only tracked paths.
-- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, JobWrapper now fail-closes before verifier execution when tracked Crypt4GH payload paths resolve outside job-scope roots, and pre-success verifier now fails closed on residual plaintext staging artifacts under `_crypt/outputs` and `_crypt/inputs` even when untracked by dataset associations.
+- **Mitigated?**: **Partially (improved)**. Current readiness requires `outputs_to_working_directory=true` for Crypt4GH path, discovered hooks finalize from working-dir paths only, pre-success evidence validates payload header bytes, and pre-success verifier fails closed on residual plaintext staging artifacts under `_crypt/outputs` and `_crypt/inputs` even when untracked by dataset associations. Finalize-path containment now distinguishes plaintext roots from broader output roots so object-store dataset targets remain valid while plaintext provenance stays constrained.
 - **Mitigation implemented**:
-  - Added JobWrapper pre-success scope gate (`_assert_crypt4gh_output_payloads_within_job_scope_roots`) to enforce that tracked Crypt4GH output payload paths stay within job-scope roots (working directory and its parent scope used by current marker/layout conventions).
-  - Gate runs before `verify_crypt4gh_pre_success_output_evidence(...)` and raises fail-closed diagnostics when payload path provenance is out-of-scope.
+  - Removed the over-aggressive JobWrapper pre-success scope gate for tracked output payload paths because it incorrectly blocked legitimate object-store dataset destinations.
+  - Added explicit `plaintext_root_paths` provenance to declared output targets and threaded it through finalize checks.
+  - Finalize now enforces `plaintext_path` containment against plaintext roots while continuing to enforce broader output/marker path containment via `allowed_root_paths`.
   - Added regression coverage:
-    - `test_verify_crypt4gh_pre_success_evidence_fails_for_tracked_payload_outside_job_scope`
+    - `test_verify_crypt4gh_pre_success_evidence_allows_tracked_payload_on_object_store_path`
+    - `test_finalize_declared_outputs_rejects_plaintext_path_outside_plaintext_root_even_when_output_paths_allowed`
+    - `test_finalize_declared_outputs_allows_dataset_output_path_outside_working_root_with_plaintext_root_constrained`
 - **Still needed**:
   - stronger constraints on writable paths for Crypt4GH jobs,
   - broader discovery/integration checks for unexpected out-of-tree plaintext artifacts beyond tracked output datasets.
-- **Priority / severity**: **High**.
+- **Priority / severity**: **Reduced (Medium-High)**.
 
 ## 7) Path construction validation for finalize-about-to-persist
 
@@ -479,3 +482,10 @@ The Crypt4GH fail-closed posture is **substantially stronger** after recent hard
 - **Why**: input-side plaintext staging can remain after processing and is not always represented by tracked output associations; output-only residual scanning misses this class of residue.
 - **Security impact**: positive. Jobs now fail before success when plaintext staging artifacts remain under either Crypt4GH output or input staging roots.
 - **Follow-up**: add integration-level checks for destination-specific input staging cleanup behavior across remote/Pulsar execution paths.
+
+### 2026-07-19 — Gap #6 constrain plaintext provenance without blocking object-store dataset outputs
+
+- **Decision**: remove the JobWrapper payload-scope gate that rejected tracked object-store output paths, and enforce finalize-time `plaintext_path` containment against explicit `plaintext_root_paths` while keeping broader `allowed_root_paths` for encrypted output/marker containment.
+- **Why**: object-store dataset destinations are expected outside the job working directory in supported deployments; fail-closed controls must target plaintext provenance specifically, not legitimate final encrypted destinations.
+- **Security impact**: positive. Plaintext paths now fail closed when outside declared plaintext roots, while valid object-store encrypted output destinations remain accepted.
+- **Follow-up**: add integration coverage for destination-specific object-store topologies and Pulsar parity for `plaintext_root_paths` propagation.

@@ -285,6 +285,7 @@ class _DeclaredCrypt4GHOutputTarget:
     encrypted_ext: str
     clear_compute_keypair: bool
     allowed_root_paths: tuple[str, ...] = ()
+    plaintext_root_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -954,6 +955,7 @@ def collect_declared_crypt4gh_output_targets(
                 working_directory=working_directory,
                 dataset_output_path=cast(Optional[str], getattr(dataset_path, "real_path", None)),
             ),
+            plaintext_root_paths=(str(Path(working_directory).resolve()),),
         )
         targets.append(_declared_output_target_to_mapping(target))
 
@@ -1099,6 +1101,8 @@ def _declared_output_target_to_mapping(target: _DeclaredCrypt4GHOutputTarget) ->
         mapping["extra_files_manifest_path"] = target.extra_files_manifest_path
     if target.allowed_root_paths:
         mapping["allowed_root_paths"] = list(target.allowed_root_paths)
+    if target.plaintext_root_paths:
+        mapping["plaintext_root_paths"] = list(target.plaintext_root_paths)
     return mapping
 
 
@@ -1175,6 +1179,7 @@ def finalize_about_to_persist_crypt4gh_payload(
     extra_files_output_path: str = "",
     extra_files_manifest_path: str = "",
     allowed_root_paths: Sequence[str] = (),
+    plaintext_root_paths: Sequence[str] = (),
     clear_compute_keypair: bool = True,
 ) -> None:
     resolved_allowed_root_paths = [str(path) for path in allowed_root_paths if str(path)]
@@ -1201,8 +1206,12 @@ def finalize_about_to_persist_crypt4gh_payload(
     if extra_files_manifest_path:
         concrete_target["extra_files_manifest_path"] = extra_files_manifest_path
     concrete_target["allowed_root_paths"] = resolved_allowed_root_paths
+    resolved_plaintext_root_paths = [str(path) for path in plaintext_root_paths if str(path)]
+    if resolved_plaintext_root_paths:
+        concrete_target["plaintext_root_paths"] = resolved_plaintext_root_paths
 
     allowed_roots = _resolve_allowed_root_paths(concrete_target)
+    plaintext_roots = _resolve_plaintext_root_paths(concrete_target, fallback_roots=allowed_roots)
     _assert_path_within_allowed_roots(
         Path(output_path),
         allowed_root_paths=allowed_roots,
@@ -1234,7 +1243,7 @@ def finalize_about_to_persist_crypt4gh_payload(
         )
     _assert_path_within_allowed_roots(
         Path(plaintext_path),
-        allowed_root_paths=allowed_roots,
+        allowed_root_paths=plaintext_roots,
         context="finalize plaintext_path",
     )
 
@@ -1437,9 +1446,10 @@ def _iter_unique_existing_output_targets(
 
             plaintext_path_value = str(concrete_target.get("plaintext_path", "") or "")
             if plaintext_path_value:
+                plaintext_roots = _resolve_plaintext_root_paths(concrete_target, fallback_roots=allowed_roots)
                 _assert_path_within_allowed_roots(
                     Path(plaintext_path_value),
-                    allowed_root_paths=allowed_roots,
+                    allowed_root_paths=plaintext_roots,
                     context="finalize plaintext_path",
                 )
 
@@ -1541,6 +1551,9 @@ def _resolve_output_targets(target: Mapping[str, Any]) -> list[dict[str, Any]]:
         allowed_root_paths = target.get("allowed_root_paths")
         if isinstance(allowed_root_paths, (list, tuple)):
             concrete_target["allowed_root_paths"] = [str(path) for path in allowed_root_paths if str(path)]
+        plaintext_root_paths = target.get("plaintext_root_paths")
+        if isinstance(plaintext_root_paths, (list, tuple)):
+            concrete_target["plaintext_root_paths"] = [str(path) for path in plaintext_root_paths if str(path)]
         return [concrete_target]
 
     if target.get("discover_pattern") is not None:
@@ -2084,6 +2097,35 @@ def _resolve_allowed_root_paths(concrete_target: Mapping[str, Any]) -> tuple[Pat
                 resolved_paths.append(Path(str(path_value)).resolve(strict=False).parent)
             except Exception:
                 continue
+
+    deduped_paths: list[Path] = []
+    seen: set[str] = set()
+    for resolved_path in resolved_paths:
+        key = str(resolved_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_paths.append(resolved_path)
+
+    return tuple(deduped_paths)
+
+
+def _resolve_plaintext_root_paths(
+    concrete_target: Mapping[str, Any], *, fallback_roots: Sequence[Path]
+) -> tuple[Path, ...]:
+    configured_paths = concrete_target.get("plaintext_root_paths")
+    resolved_paths: list[Path] = []
+
+    if isinstance(configured_paths, (list, tuple)):
+        for path_value in configured_paths:
+            try:
+                candidate = Path(str(path_value)).resolve(strict=False)
+            except Exception:
+                continue
+            resolved_paths.append(candidate)
+
+    if not resolved_paths:
+        resolved_paths = list(fallback_roots)
 
     deduped_paths: list[Path] = []
     seen: set[str] = set()
