@@ -253,7 +253,7 @@ The easiest way to understand the current branch is to look at the main entities
 | Entity | Main files / surfaces | Role in the Crypt4GH path |
 | --- | --- | --- |
 | **Galaxy datatype and registry layer** | `lib/galaxy/datatypes/binary.py`, `lib/galaxy/datatypes/registry.py`, `lib/galaxy/datatypes/sniff.py`, `lib/galaxy/util/checkers.py`, `lib/galaxy/util/crypt4gh.py`, `lib/galaxy/util/compression_utils.py` | Recognizes Crypt4GH files, preserves inner datatype information, stores the header as metadata, prioritizes Crypt4GH detection before gzip during file opening, and generates `.c4gh` / nested dynamic datatypes. |
-| **Galaxy metadata/reset layer** | `lib/galaxy/metadata/__init__.py`, `lib/galaxy/metadata/set_metadata.py`, `lib/galaxy/model/__init__.py` | Carries Crypt4GH metadata through dataset lifecycle events and resets stale compute-key metadata when outputs should stop looking like compute-recrypted inputs. |
+| **Galaxy metadata/reset layer** | `lib/galaxy/datatypes/binary.py`, `lib/galaxy/metadata/set_metadata.py`, `lib/galaxy/model/store/discover.py` | Carries Crypt4GH metadata through dataset lifecycle events and resets stale compute-key metadata when outputs should stop looking like compute-recrypted inputs. |
 | **Galaxy client / history UI** | `client/src/components/History/Content/Dataset/DatasetActions.vue` | Exposes the visible recrypt action and creates the user-facing “prepare for compute” workflow. |
 | **Recryptor A (user-side)** | external/browser-adjacent service | Uses user-side key context to prepare headers for compute use. In the checked-in UI flow, this is still assumed to exist at `https://localhost:61357/recrypt_header`. |
 | **Recryptor B (compute-side)** | external recryptor repo, compute-mode service | Rewrites headers for job-local compute execution and rewrites output headers back toward user-readable form. Galaxy points to it through `crypt4gh_reencryption_service_url`. |
@@ -308,7 +308,7 @@ This is the high-level path the code implements today.
 
 - `remote_tool_eval.py` runs on the execution side and loads the minimal app/tool context.
 - The Crypt4GH helper prepares `_crypt/inputs/.../plaintext` material under the job working directory rather than relying on the older Galaxy-side staging model.
-- The helper generates a per-job key pair in memory only; the job public key is sent to recryptor B, while the job private key never leaves process memory and is not persisted to disk.
+- The helper generates a per-job key pair in memory; the job public key is sent to recryptor B, while the per-job private key is retained only as Python bytes across helper functions, never written to disk or sent over the network.
 - Galaxy calls recryptor B to rewrite headers for job-local compute use through `POST /recrypt_header_to_job_key`.
 - The actual tool then runs against plaintext-compatible paths inside the compute-local workspace.
 
