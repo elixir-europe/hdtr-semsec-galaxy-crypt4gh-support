@@ -1,27 +1,38 @@
-# Crypt4GH hardening handover
+# Crypt4GH branch handover
 
 ## Overview
 
-This handover explains what the current Crypt4GH hardening branch changes, how to run the supported setup, and where the main remaining risks are.
+This handover covers the full Crypt4GH story on this branch, from the first ability to upload and recognize Crypt4GH datasets, through the browser-side recrypt workflow, through the remote-execution redesign, and finally through the fail-closed hardening cycle.
 
 If you want a live example before reading code, see **Appendix A** for a public Galaxy history that demonstrates the end-to-end Crypt4GH flow.
 
 ### The short version
 
-- This branch makes encrypted-output handling safer and earlier in the job lifecycle.
-- Jobs fail sooner when the required secure runtime path is missing.
-- Galaxy checks encrypted outputs before marking jobs successful or saving discovered results.
-- Plaintext cleanup is more thorough and more explicit when something goes wrong.
+- Galaxy can now recognize Crypt4GH-encrypted datasets, keep their type information, and carry their encryption header as metadata.
+- Users can recrypt eligible datasets from the UI so compute-side jobs can work on them without exposing user private keys to Galaxy.
+- Remote execution moved the sensitive decrypt, finalize, and cleanup work closer to the compute environment.
+- The later hardening work made jobs fail earlier when the secure path is missing and made encrypted outputs get checked before Galaxy records success or saves discovered files.
 - Pulsar follow-up work was split into its own branch so it can be reviewed separately.
 
-In repo-specific terms, this means the non-Pulsar Crypt4GH hardening tightened remote-evaluation checks, finalize-before-persist handling for discovered outputs, plaintext-root containment, and cleanup diagnostics.
+In repo-specific terms, the branch spans six phases: dataset and datatype support, client-side recrypt UI, design and planning artifacts, remote-evaluation implementation, follow-up fixes and enforcement work, and the final Gap #1–#14 fail-closed hardening cycle.
 
 ### Who should read which part
 
 - **Overview**: for anyone who wants the main outcome in plain language.
 - **Quick start / setup guide**: for operators and anyone trying to reproduce the supported path.
-- **Deep dive**: for maintainers and reviewers who want file-by-file and test-by-test detail.
+- **Deep dive**: for maintainers and reviewers who want the branch history, architecture evolution, and file-by-file coverage.
 - **Appendix**: for the public demo, reading map, and supporting reference material.
+
+### What this branch added over time
+
+Seen as one long branch rather than one hardening cycle, the work progressed through six steps:
+
+1. **Dataset support**: Galaxy learned how to detect `.c4gh` files, preserve their underlying datatype, and store Crypt4GH header metadata.
+2. **User workflow support**: the history UI gained a recrypt action so encrypted datasets could be prepared for compute use.
+3. **Architecture and planning**: design and plan documents reworked the trust model and separated user-side and compute-side responsibilities.
+4. **Remote execution**: job execution moved from earlier staging ideas toward remote-evaluation handling close to the compute node.
+5. **Fixes and output enforcement**: later work closed gaps in runtime extension handling, discovered outputs, extra-files handling, and postrun behavior.
+6. **Fail-closed hardening**: the final cycle tightened path containment, TTL handling, output evidence checks, purge safety, and discovered-output finalization.
 
 ### Current code state at a glance
 
@@ -34,8 +45,11 @@ The branch now blocks unsafe behavior at four clearer checkpoints in the job lif
 
 In practical terms, the branch is stronger around:
 
-- declared output encryption,
-- discovered output encryption before object-store persistence,
+- upload and type inference for encrypted datasets,
+- header metadata capture and dynamic `.c4gh` datatype handling,
+- browser-driven recrypt workflows,
+- remote input staging and compute-side reheadering,
+- declared and discovered output encryption before persistence,
 - marker and extension handling,
 - TTL / expiry fail-closed behavior,
 - plaintext staging containment,
@@ -60,21 +74,22 @@ Use this section if you need the supported operator setup before reading the imp
 1. Deploy compute-side recryptor B (see section 5).
 2. Apply the minimum Galaxy configuration (see section 3).
 3. Confirm remote evaluation, extended metadata, and working-directory outputs (see section 4).
-4. Set TTL and debug preferences (see sections 7 and 8).
-5. Run manual verification (see section 9).
+4. Confirm the user-side recrypt flow that prepares compute-readable inputs (see section 6).
+5. Set TTL and debug preferences (see sections 7 and 8).
+6. Run manual verification (see section 9).
 
 ### 1. Supported execution model
 
-The current branch supports a specific remote execution model. In plain terms: Galaxy prepares the job, the compute-side path handles the sensitive output-finalization work, and local tool evaluation is intentionally not part of the supported Crypt4GH flow.
+The current branch supports a specific remote execution model. In plain terms: Galaxy stores encrypted data and the metadata needed to work with it, the user-side flow prepares inputs for compute use, and the compute-side path handles the sensitive decrypt, finalize, and cleanup work. Local tool evaluation is intentionally not part of the supported Crypt4GH flow.
 
 ### 2. Recryptor A vs recryptor B
 
-The current design uses two separate roles:
+The later phases of the branch split the recrypt workflow into two roles:
 
 - **Recryptor A (user-side)**: the upstream or browser-adjacent service that works with user-side material and obtains compute-side key context for input staging.
 - **Recryptor B (compute-side)**: the service Galaxy talks to during remote execution for compute-key information and header recryption.
 
-For this branch, the main Galaxy-facing configuration is for **compute-side recryptor B**.
+This split is important because Galaxy is not meant to hold user private keys or compute-side private keys.
 
 ### 3. Minimum Galaxy configuration
 
@@ -113,7 +128,8 @@ The compute-side service must:
 - be reachable from the compute environment,
 - mint and track time-bounded compute-side key ids,
 - answer the compute-key info route,
-- and support the header recryption routes used by this design.
+- recrypt headers from compute-side key context into job-local key context,
+- and recrypt output headers back toward user-readable context.
 
 The relevant route family is:
 
@@ -125,9 +141,9 @@ For local or manual testing, the repo already contains a mock compute-side servi
 
 ### 6. User-side recryptor A expectations
 
-The user-side service is upstream of this branch’s output hardening work. It obtains compute-side key information and recrypts input headers into compute-side context.
+The user-side service is upstream of this branch’s runtime hardening work. It obtains compute-side key information and recrypts input headers into compute-side context so later jobs can run without handing user private keys to Galaxy.
 
-This branch does **not** reimplement recryptor A inside Galaxy. It assumes that prerequisite flow already exists.
+The history UI recrypt button is one visible piece of that flow. This branch does **not** reimplement user-side key custody inside Galaxy.
 
 ### 7. TTL-related settings
 
@@ -172,76 +188,192 @@ Everything below is optional **deep-dive material for reviewers and maintainers*
 
 ## Deep dive (for reviewers and maintainers)
 
-### How the branch changed
+### Branch scope and chronology
 
-This branch history is easier to understand as a few themed changes than as a gap-by-gap list.
+This handover now covers the entire branch history from its divergence from `dev` / `origin/dev`, not only the last hardening cycle.
 
-#### 1. Output finalization now happens earlier
+#### Phase 1 — Initial Crypt4GH dataset support
 
-The branch closes the most serious practical hole by finalizing discovered outputs before Galaxy persists them to the object store.
+This phase taught Galaxy to treat Crypt4GH as a real encrypted dataset type instead of opaque binary content.
 
-That includes:
+Main outcomes:
 
-- wiring finalization into the discovery persistence path,
-- carrying `require_crypt4gh_extension` through discovery flows,
-- and strengthening tests around discovery-time behavior.
+- Crypt4GH compression detection was added.
+- Dynamic `.c4gh` datatype handling was added, including nested cases such as `.gz.c4gh`.
+- Upload type inference improved so Galaxy could keep the inner datatype, such as `fastqsanger.c4gh`.
+- Tests and fixtures were added for encrypted FASTQ handling.
+- The branch moved away from a `crypt4ghfs` mounting idea toward direct `crypt4gh` library usage.
+- Output encryption support and datatype support were merged into the later `Crypt4GHDynamicCompressedArchive` design.
+- The file suffix standardized on `.c4gh` instead of `.crypt4gh`.
+- The `crypt4gh` package was added as a dependency.
 
-#### 2. More control moved to the compute-side path
+Why this phase mattered:
 
-The branch shifts sensitive output handling away from centrally authored wrapper logic and closer to the place where files actually exist.
+- it made encrypted files first-class datasets,
+- it preserved useful inner-type information,
+- and it created the metadata hooks needed for later recryption and remote execution work.
 
-#### 3. Pre-success verification became stricter
+#### Phase 2 — Client-side recrypt UI
 
-Jobs now need better evidence before Galaxy reports success for Crypt4GH outputs.
+This phase added a user-visible way to prepare encrypted datasets for compute use.
 
-#### 4. Plaintext containment became narrower and safer
+Main outcomes:
 
-An earlier scope gate turned out to be too broad in production because it rejected legitimate object-store destinations. The branch corrected this by removing that gate and replacing it with `plaintext_root_paths` containment.
+- the history UI gained a recrypt button,
+- the recrypt key icon was shown for dynamic file types as well as static ones,
+- supporting Galaxy metadata behavior was adjusted so Crypt4GH metadata could flow through the UI path,
+- and one earlier binary-datatype bugfix was later reverted after the branch clarified how the path should behave.
 
-This is an important design correction: the branch became safer by checking the right boundary, not by checking every possible boundary.
+Why this phase mattered:
 
-#### 5. Cleanup and diagnostics became more defensive
+- it turned the earlier datatype support into an operator and user workflow,
+- and it made the recrypt process visible and usable instead of purely architectural.
 
-The purge path is more careful around traversal, symlinks, permission failures, and concurrent filesystem changes.
+#### Phase 3 — Documentation and design
 
-The practical outcome is better failure reporting and lower risk of unsafe cleanup behavior.
+This phase reworked the trust model before deeper runtime implementation continued.
 
-#### 6. Pulsar work was split out for separate review
+Main outcomes:
 
-Pulsar-related command assembly and parity tests were extracted into a dedicated branch so the non-Pulsar hardening story stayed reviewable.
+- the branch documented Galaxy/Pulsar remote-execution findings,
+- the Phase 2 reimplementation design was written and revised,
+- the implementation plan was added and tightened,
+- output-enforcement addenda and supersession notes were added,
+- and a final phase handoff note was recorded.
 
-### Architecture direction: more compute-side control, less central wrapper logic
+Why this phase mattered:
 
-The main architectural change is simple to describe: the branch pushes more of the sensitive Crypt4GH work to the place where the files are actually produced.
+- it marked the shift from an earlier single re-encryptor and Galaxy-authored runtime model to the later split recryptor A/B model,
+- and it gave the later implementation and hardening work a documented contract.
 
-Earlier versions relied more on **orchestrator-side command packing**. In practice, that meant Galaxy authored too much of the wrapper behavior centrally.
+#### Phase 4 — Remote evaluation implementation
 
-#### Why the older approach was a problem
+This phase turned the new design into working execution behavior.
 
-- It kept too much sensitive execution planning in the orchestrator.
-- It separated command construction from the code that observed the real filesystem state.
-- It made fail-closed cleanup and finalization harder to reason about.
-- It increased divergence between non-Pulsar remote-evaluation flows and Pulsar command-assembly flows.
+Main outcomes:
 
-#### Why the branch moved toward remote evaluation
+- remote-execution contract and integration tests were defined first,
+- Crypt4GH remote-eval settings were propagated into metadata handling,
+- remote input staging was added for remote tool evaluation,
+- reheadered input was streamed directly into decrypt,
+- declared remote outputs were finalized,
+- cleanup failure handling, TTL preflight, and fail-closed expiry handling were added,
+- the legacy staging path was removed,
+- live recryptor smoke-environment routing was supported,
+- remote tool evaluation stdout and stderr preservation was fixed,
+- cleanup postrun and walltime TTL gating were added,
+- and remote execution helpers were split and reorganized.
 
-Remote evaluation gives the compute-side path the information and control needed to make finalization more local and more verifiable.
+Why this phase mattered:
 
-Benefits in the current branch:
+- it made the architecture real,
+- it established the compute-side runtime path,
+- and it created the surfaces that later hardening work would tighten.
 
-- finalization happens near the produced files,
-- cleanup and failure behavior follow real execution outcome,
-- pre-success verification can inspect real on-disk results,
-- discovered outputs can be finalized before persistence,
-- and the fail-closed path is easier to reason about because more of the plaintext lifecycle is owned in one place.
+#### Phase 5 — Fixes and hardening iterations before the main gap cycle
 
-This does **not** eliminate every architecture tension. Pulsar still needed its own parity branch because its command assembly differs from the main remote-evaluation path. But the direction is now clearer and easier to defend.
+This phase closed many correctness and enforcement gaps before the formal Gap #1–#14 cycle.
+
+Main outcomes:
+
+- remote helper logs and warning diagnostics were preserved,
+- `.c4gh` suffix handling and runtime datatype lookup were corrected,
+- remote output finalization and cleanup invariants were hardened,
+- aiohttp-based recryptor calls and batched input recrypt runs improved the runtime path,
+- discovered outputs were kept encrypted through metadata collection,
+- discovered output finalization was enforced in the metadata path,
+- duplicate discovered extensions were avoided,
+- declared and discovered `extra_files` payloads were finalized fail-closed,
+- a pre-success output evidence verifier was added,
+- plaintext allow-list checks were added,
+- embedded postrun Python mismatch handling was made fail-closed,
+- encrypted extension resolution during finalization was required,
+- transparent input readiness checks were enforced,
+- and embedded Python cleanup/finalize flow was stabilized.
+
+Why this phase mattered:
+
+- it connected the broad design to many awkward real-world runtime edges,
+- and it set up the final hardening cycle by making the biggest enforcement points explicit.
+
+#### Phase 6 — Main fail-closed hardening cycle
+
+This is the final cycle that the earlier handover version focused on.
+
+Main outcomes:
+
+- path containment and local-strategy fail-closed handling were strengthened,
+- the collection discovery encryption bypass was fixed,
+- metadata reset and allowed-root provenance were tightened,
+- extension resolution and traversal containment were hardened,
+- best-effort purge behavior became more defensive,
+- TTL boundary behavior and marker evidence handling were tightened,
+- the dynamic wrapper warning path was fixed,
+- debug output was gated behind explicit opt-in,
+- plaintext-root constraints replaced an over-aggressive earlier scope gate,
+- Pulsar work was extracted to a separate worktree,
+- and follow-up coverage broadened the regression net.
+
+Why this phase mattered:
+
+- it made the runtime safer under failure,
+- it corrected a few earlier over-broad or under-specified checks,
+- and it produced the branch’s current fail-closed posture.
+
+### Architecture evolution across the branch
+
+The architecture changed substantially over the life of the branch. The easiest way to understand it is as three major transitions.
+
+#### 1. From “encrypted file upload” to “encrypted typed dataset”
+
+At first, the key problem was basic: Galaxy needed to know that a file was Crypt4GH-encrypted without losing the useful information about what was inside it.
+
+That led to:
+
+- magic-byte detection,
+- dynamic `.c4gh` datatype registration,
+- nested compressed-type support,
+- and header extraction into dataset metadata.
+
+This phase made Crypt4GH a dataset and metadata problem, not just a raw file problem.
+
+#### 2. From `crypt4ghfs` ideas to direct library usage
+
+An earlier direction relied more on mount-style access. The branch later moved to direct `crypt4gh` library usage.
+
+Why that mattered:
+
+- it reduced operational coupling,
+- it made testing and packaging simpler,
+- and it gave later remote-execution code more direct control over header handling and output finalization.
+
+This was an important early simplification before the larger runtime redesign.
+
+#### 3. From orchestrator-authored behavior to compute-side remote evaluation
+
+The later design work concluded that Galaxy should not author too much of the sensitive decrypt and finalize behavior centrally.
+
+That led to:
+
+- splitting the recrypt concept into user-side recryptor A and compute-side recryptor B,
+- treating Galaxy as the keeper of encrypted datasets and metadata rather than private keys,
+- moving runtime crypto actions behind `remote_tool_eval.py`,
+- and keeping plaintext handling and cleanup closer to the compute workspace.
+
+Why the newer approach was chosen:
+
+- the code seeing the real files can make better cleanup and fail-closed decisions,
+- compute-side key custody stays separated from Galaxy,
+- output finalization can happen before persistence,
+- and the trust model is easier to explain and audit.
+
+This does **not** eliminate every architecture tension. Pulsar still needed its own parity branch because its command assembly differs from the main remote-evaluation path. But the branch direction is now much clearer than in the earlier phases.
 
 ### Branches and review boundaries
 
 #### Primary branch: `explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
 
-This branch contains the full non-Pulsar hardening set and is the main subject of this handover.
+This branch contains the full non-Pulsar Crypt4GH story from datatype support through hardening.
 
 #### Pulsar branch: `work/pulsar-tail-20260718`
 
@@ -268,148 +400,195 @@ The added parity tests are useful, but they are still mostly **command-shape ass
 
 - `work/fix-remote-tool-eval-python-fail-closed` already exists for earlier remote-tool-eval hardening.
 - `work/pulsar-tail-20260718` already exists for the Pulsar parity slice.
-- `backup/explore-...-before-pulsar-rewrite-20260718` preserves the pre-extraction state.
+- a temporary logging commit existed during the branch history and was later removed.
 
 ### Reference snapshot
 
-If you need the branch inventory details while reviewing, use this snapshot:
+If you need the current branch inventory details while reviewing, use this snapshot:
 
 > - Primary branch: `explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
-> - Primary branch scope: all non-Pulsar Crypt4GH fail-closed work in this worktree
-> - Primary branch head: `41589e4876`
-> - Base commit on `dev`: `5b9b6d3f20`
-> - Main branch diff size: 16 files changed, `+4012/-223`
-> - Main branch verification status: 133 tests passed, 0 failed
+> - Earlier hardening-cycle base reference: `5b9b6d3f20`
+> - Branch scope: full non-Pulsar Crypt4GH history from initial dataset support through hardening
 > - Pulsar follow-up branch: `work/pulsar-tail-20260718`
-> - Pulsar branch diff size: 3 files changed, `+145/-7`
-> - Pulsar branch verification status: 14 tests passed, 0 failed
+> - Other related branch: `work/fix-remote-tool-eval-python-fail-closed`
 
-### Code changes by file
+### Code changes by file and area
 
-#### `lib/galaxy/tools/crypt4gh_remote_execution.py`
+The branch touches many files. The most useful way to read them is by capability rather than by commit.
 
-This file is now the main control point for non-Pulsar Crypt4GH safety checks.
+#### Phase 1 surfaces: detection, datatypes, and upload handling
 
-Key changes:
+##### `lib/galaxy/util/checkers.py`, `lib/galaxy/util/crypt4gh.py`, `lib/galaxy/datatypes/sniff.py`
 
-- pre-success output evidence verification via `verify_crypt4gh_pre_success_output_evidence()`,
-- safer finalization of extra-files payloads,
-- allowed-root containment checks,
-- race-tolerant marker and extension resolution,
-- finalize-before-persist support for discovered outputs,
-- plaintext root provenance support via `plaintext_root_paths`,
-- stronger purge diagnostics and symlink handling,
-- and opt-in debug emission.
+These files gave Galaxy the ability to recognize Crypt4GH files and reason about them without decrypting payloads.
+
+Why they matter:
+
+- they distinguish Crypt4GH from generic binary content,
+- they let upload and sniff logic preserve useful inner-type information,
+- and they provide the low-level header validation used across the rest of the branch.
+
+##### `lib/galaxy/datatypes/binary.py`, `lib/galaxy/datatypes/registry.py`, `lib/galaxy/config/sample/datatypes_conf.xml.sample`
+
+These files made `.c4gh` a first-class dynamic datatype family.
+
+Key changes included:
+
+- `Crypt4GHDynamicCompressedArchive`,
+- header metadata extraction,
+- transparent input matching gates,
+- nested `.gz.c4gh` support,
+- and on-demand runtime datatype creation for base types that were not preregistered.
+
+Why they matter:
+
+- most of the early branch value depends on these types existing,
+- later metadata reset and runtime lookup fixes build on them,
+- and they define the dataset-level contract that the rest of the runtime follows.
+
+##### `lib/galaxy/datatypes/upload_util.py`, `lib/galaxy_test/api/test_tools_upload.py`, `test/unit/data/datatypes/test_sniff.py`, `test/unit/data/datatypes/test_datatypes_registry.py`, `test/unit/data/datatypes/test_crypt4gh.py`
+
+These files cover the upload and datatype flows.
+
+Why they matter:
+
+- they prove that `.c4gh` datasets are recognized correctly,
+- they cover nested datatype generation and metadata behavior,
+- and they hold some of the earliest regression coverage in the branch.
+
+##### `lib/galaxy/dependencies/pinned-requirements.txt`, `test-data/*crypt4gh*`, `lib/galaxy/datatypes/test/*.c4gh`
+
+These files add the actual dependency and encrypted fixtures.
+
+Why they matter:
+
+- without them, the rest of the branch could not be exercised realistically,
+- and they anchor both unit and manual testing.
+
+#### Phase 2 surfaces: client-side recrypt workflow
+
+##### `client/src/components/History/Content/Dataset/DatasetActions.vue`
+
+This file added the visible recrypt action in the history UI.
 
 Why it matters:
 
-- most of the branch’s non-Pulsar fail-closed policy now lives here,
-- both declared and discovered output enforcement depend on it,
-- and it most clearly expresses the move toward compute-side finalization.
+- it gives users and testers a concrete recrypt action,
+- it shows the key icon for `.c4gh` datasets, including dynamic types,
+- and it copies the dataset, attaches recrypt metadata, and triggers datatype redetection.
 
-Generalization potential:
+##### `lib/galaxy/webapps/galaxy/controllers/dataset.py`, `lib/galaxy/managers/datasets.py`, `lib/galaxy/metadata/__init__.py`, `lib/galaxy/metadata/set_metadata.py`, `lib/galaxy/model/__init__.py`
 
-- `_assert_path_within_allowed_roots()` is a generally useful containment helper,
-- the best-effort purge diagnostic pattern is likely reusable outside Crypt4GH,
-- and some of the safe extra-files handling ideas may generalize.
+These files are not “the recrypt button” themselves, but they are the server-side surfaces the UI and runtime depend on for dataset editing, metadata loading, and dynamic datatype resolution.
 
-What is still specific:
+Why they matter:
 
-- the pre-success Crypt4GH evidence verifier itself is strongly datatype- and workflow-specific.
+- they expose editable and visible metadata fields,
+- they participate in metadata collection and reload,
+- and they help runtime `.c4gh` types survive later phases of the branch.
 
-#### `lib/galaxy/tools/remote_tool_eval.py`
+#### Phase 3 surfaces: design and planning artifacts
 
-This file makes the remote runtime behave more safely when cleanup or finalization steps fail.
+##### `crypt4gh-galaxy-support.md`
 
-Key changes:
+This document captures the early support plan and earlier design assumptions.
 
+Why it matters now:
+
+- it is the best record of the earliest phase goals,
+- especially the initial sniffing, metadata, and early staging ideas.
+
+##### `crypt4gh-remote-exec-findings.md`, `crypt4gh-phase-2-reimplementation-design.md`, `crypt4gh-phase-2-implementation-plan.md`
+
+These documents explain the trust-model shift and the move toward remote evaluation.
+
+Why they matter now:
+
+- they document why the earlier runtime ideas were revised,
+- and they remain the main architecture and plan trail for the middle of the branch.
+
+##### `crypt4gh-phase-2-output-enforcement-plan.md`, `crypt4gh-phase-2-output-enforcement-spec.md`, `crypt4gh-fail-closed-evaluation.md`
+
+These documents track the later enforcement and hardening semantics.
+
+Why they matter now:
+
+- they record the branch’s output-enforcement and fail-closed decisions,
+- and they are the best supporting references for the last two phases.
+
+#### Phase 4 and 5 surfaces: remote execution and runtime support
+
+##### `lib/galaxy/tools/remote_tool_eval.py`
+
+This file is the runtime bridge that lets remote evaluation own more of the Crypt4GH path.
+
+Key branch themes here:
+
+- remote input staging support,
+- runtime setup propagation,
 - embedded cleanup and finalize script hardening,
-- stronger failure propagation,
-- and improved marker and cleanup handling.
+- interpreter alignment fixes,
+- stdout/stderr preservation,
+- and failure propagation.
 
 Why it matters:
 
-- it is the runtime bridge that lets remote evaluation own more of the fail-closed path,
-- and it is one of the clearest concrete outcomes of the move away from centrally packed wrapper logic.
+- it is where the architectural redesign becomes real execution behavior,
+- and it is the clearest non-Pulsar compute-side seam in the branch.
 
-Generalization potential:
+##### `lib/galaxy/tools/crypt4gh_remote_execution.py`
 
-- fail-closed bootstrap and failure-propagation improvements,
-- some remote-eval cleanup behavior,
-- and possibly parts of the embedded script hardening.
+This file is now the main control point for non-Pulsar Crypt4GH runtime safety.
 
-Still mostly Crypt4GH-specific in practice:
+Key branch themes here:
 
-- finalize semantics and marker expectations.
-
-#### `lib/galaxy/model/store/discover.py`
-
-This file closes the “persist first, secure later” problem for discovered outputs.
-
-Key changes:
-
-- integration of `finalize_about_to_persist_crypt4gh_payload()` into object-store persistence paths,
-- and propagation of `require_crypt4gh_extension` through discovery metadata flows.
+- remote input preparation,
+- declared and discovered output finalization,
+- extra-files finalization,
+- pre-success output evidence verification,
+- TTL and compute-key checks,
+- path containment,
+- plaintext-root provenance,
+- and purge diagnostics.
 
 Why it matters:
 
-- discovered outputs can no longer be persisted first and finalized later,
-- and extension enforcement is less likely to vary by caller.
+- most of the branch’s mature fail-closed logic lives here,
+- and it concentrates many later fixes that were scattered across several phases.
 
-Generalization potential: low. The design pattern may be interesting more broadly, but the concrete hooks are mostly Crypt4GH-specific.
+##### `lib/galaxy/jobs/__init__.py`, `lib/galaxy/job_execution/output_collect.py`, `lib/galaxy/model/store/discover.py`
 
-#### `lib/galaxy/jobs/__init__.py`
+These files connect the runtime helper to Galaxy job completion, output collection, and discovered-output persistence.
 
-This file now ties job success more directly to Crypt4GH output evidence.
+Why they matter:
 
-Key changes:
+- they are the bridge between runtime behavior and stored datasets,
+- they are where finalize-before-persist semantics became real,
+- and they are where several tricky discovered-output and object-store issues were corrected.
 
-- integration of the Crypt4GH pre-success verifier into job completion handling,
-- and removal of the earlier over-broad output scope-gate helpers.
+##### `lib/galaxy/config/sample/galaxy.yml.sample`, `lib/galaxy/config/schemas/config_schema.yml`, `doc/source/admin/galaxy_options.rst`
 
-Why it matters:
+These files expose the operational configuration surface.
 
-- job success is now conditional on stronger Crypt4GH evidence,
-- and this is where the branch corrected the production regression.
+Why they matter:
 
-Generalization potential:
+- they define how operators enable and configure the feature,
+- and they reflect the branch’s move toward remote-evaluation requirements and compute-side recryptor routing.
 
-- the idea of a datatype- or policy-specific pre-success verifier is broadly interesting,
-- but the current implementation remains tightly Crypt4GH-oriented.
+##### `lib/galaxy/util/crypt4gh.py`
 
-#### `lib/galaxy/datatypes/binary.py`
-
-This small change fixes a real metadata correctness problem.
-
-Key change:
-
-- `Crypt4GHDynamicCompressedArchive.set_meta()` now resets header-related metadata correctly when clearing compute-keypair state.
+This utility module centralizes low-level Crypt4GH header handling.
 
 Why it matters:
 
-- it fixes stale metadata leakage in modify-input style tools,
-- even though the diff itself is easy to miss in review.
+- it gives the branch one place for basic header validation and encrypted-data checks,
+- and it reduces duplication between datatype logic and runtime logic.
 
-Generalization potential: none in practice; this is Crypt4GH-specific datatype behavior.
+#### Phase 6 and follow-up surfaces: hardening corrections and general fixes
 
-#### `lib/galaxy/job_execution/output_collect.py`
+##### `lib/galaxy/security/object_wrapper.py`
 
-This file carries the output target information needed for the narrower plaintext-root checks.
-
-Key change:
-
-- declared output target information is threaded through for plaintext-root containment.
-
-Why it matters:
-
-- it is part of the post-regression fix,
-- and it narrows the enforcement target from “all outputs must stay in job scope” to “plaintext provenance must stay in approved plaintext roots.”
-
-Generalization potential: low.
-
-#### `lib/galaxy/security/object_wrapper.py`
-
-This file contains a clean general-purpose bug fix that was discovered while reviewing Crypt4GH-adjacent behavior.
+This file contains a clean general-purpose bug fix discovered while reviewing Crypt4GH-adjacent behavior.
 
 Key change:
 
@@ -422,7 +601,7 @@ Why it matters:
 
 This remains the clearest **general Galaxy PR candidate** in the worktree.
 
-#### `lib/galaxy/jobs/command_factory.py` (Pulsar branch only)
+##### `lib/galaxy/jobs/command_factory.py` (Pulsar branch only)
 
 This file is the Pulsar-side parity follow-up, not part of the primary worktree head.
 
@@ -431,19 +610,31 @@ Why it matters:
 - it makes Pulsar command assembly more faithful to the non-Pulsar chain shape,
 - especially around ordering, shell choice, success gating, and path resolution.
 
-Possible general-PR candidates:
+### Test coverage by phase and file
 
-- configured shell use,
-- script-directory path resolution,
-- path quoting with spaces.
+#### Phase 1 tests: datatypes, sniffing, and upload
 
-The specific gating layout was motivated by Crypt4GH wrapper parity and may not need to be generalized as-is.
+##### `test/unit/data/datatypes/test_sniff.py`
 
-### Test coverage by file
+This file covers Crypt4GH detection and extension inference.
 
-#### `test/unit/jobs/test_crypt4gh_remote_execution.py`
+##### `test/unit/data/datatypes/test_datatypes_registry.py`
 
-This is now the main regression net for the branch’s non-Pulsar security behavior.
+This file covers datatype registration, nested `.c4gh` variants, and transparent matching behavior.
+
+##### `test/unit/data/datatypes/test_crypt4gh.py`
+
+This file covers metadata extraction and later metadata reset behavior directly.
+
+##### `lib/galaxy_test/api/test_tools_upload.py`
+
+This file proves the upload path sees encrypted datasets as typed `.c4gh` content rather than generic binary data.
+
+#### Phase 4–6 tests: runtime, discovery, and hardening
+
+##### `test/unit/jobs/test_crypt4gh_remote_execution.py`
+
+This is now the main regression net for the branch’s non-Pulsar runtime security behavior.
 
 It covers:
 
@@ -463,15 +654,7 @@ Assessment:
 - high value as a regression net,
 - but also the biggest maintainability concern in the test suite.
 
-Tests that may be too process-focused:
-
-- long purge and race tests with very specific internal naming,
-- some detailed mock chains that may be more brittle than behavior-first tests,
-- and some edge-case resolution tests that assert security-relevant internals rather than only user-visible outcomes.
-
-That does not make them bad tests by default. In a security hardening branch, some implementation-proximate regression tests are justified. The main concern is size and concentration.
-
-#### `test/unit/jobs/test_remote_tool_eval.py`
+##### `test/unit/jobs/test_remote_tool_eval.py`
 
 This file gives direct coverage to the runtime seam where cleanup, finalize, and failure handling meet.
 
@@ -480,15 +663,7 @@ Assessment:
 - useful because it exercises the embedded-script/runtime boundary, not just the higher-level API,
 - but it overlaps with the main remote-execution test file and may deserve future consolidation.
 
-Possible future cleanup:
-
-- remove some overlapping tests if equivalent behavior is covered more clearly elsewhere.
-
-Reason not to simplify aggressively now:
-
-- script-level behavior and API-level behavior are still distinct failure surfaces.
-
-#### `test/unit/data/model/test_model_discovery_crypt4gh.py`
+##### `test/unit/data/model/test_model_discovery_crypt4gh.py`
 
 This file keeps the discovery-time rules in a dedicated and sensible place.
 
@@ -498,13 +673,7 @@ It covers:
 - race cases,
 - and `require_crypt4gh_extension` propagation.
 
-Assessment:
-
-- mostly behavior-aligned,
-- some overlap with `test_crypt4gh_remote_execution.py`,
-- but still a reasonable home for discovery semantics.
-
-#### `test/integration/test_crypt4gh_remote_execution.py`
+##### `test/integration/test_crypt4gh_remote_execution.py`
 
 This is the highest-confidence test file because it exercises end-to-end behavior.
 
@@ -514,57 +683,21 @@ It covers integrated behavior including:
 - TTL boundary scenarios,
 - and the broader runtime path rather than isolated helpers.
 
-Assessment:
-
-- good behavioral coverage,
-- and still the best place to answer “does this actually work in the integrated runtime?”
-
-Future priority:
-
-- more destination-topology coverage,
-- and real Pulsar runtime parity coverage.
-
-#### `test/unit/app/jobs/test_job_wrapper_crypt4gh.py`
+##### `test/unit/app/jobs/test_job_wrapper_crypt4gh.py`
 
 This file adds small, focused job-wrapper integration checks.
 
-Assessment:
-
-- good signal,
-- low maintenance,
-- and includes the regression where tracked object-store paths must remain allowed.
-
-#### `test/unit/app/jobs/test_output_collect_crypt4gh.py`
+##### `test/unit/app/jobs/test_output_collect_crypt4gh.py`
 
 This file carries the minimal coverage needed for plaintext-root propagation.
 
-Assessment: tiny but justified.
-
-#### `test/unit/data/datatypes/test_crypt4gh.py`
-
-This file covers the datatype-specific metadata fixes directly.
-
-Assessment:
-
-- focused,
-- behavior-led,
-- and worth keeping.
-
-#### `test/unit/util/test_object_wrapper.py`
+##### `test/unit/util/test_object_wrapper.py`
 
 This file is a clean, targeted regression test for the dynamic wrapper fix.
 
-Assessment: an excellent general regression test that should likely stay even if the Crypt4GH branch is later split into smaller PRs.
-
-#### `test/unit/app/jobs/test_command_factory.py` (Pulsar branch)
+##### `test/unit/app/jobs/test_command_factory.py` (Pulsar branch)
 
 This file gives useful branch-local parity coverage for Pulsar command order and failure gating.
-
-Assessment:
-
-- currently more process- and string-shape-focused than behavior-focused,
-- acceptable as branch-local parity tests,
-- but a real runtime Pulsar test would be more convincing long term.
 
 ### Tests that may need later cleanup
 
@@ -576,42 +709,19 @@ If this work is later split into smaller follow-up PRs, the following test categ
 
 Recommendation: do **not** remove them immediately. Keep them while the branch is settling, then consolidate once the intended permanent PR boundaries are decided.
 
-### Potential PR decomposition
-
-The worktree is strongly Crypt4GH-focused overall, but a few pieces stand out as candidates for more general Galaxy hardening PRs.
-
-#### Strong candidates
-
-1. **`lib/galaxy/security/object_wrapper.py` / `test/unit/util/test_object_wrapper.py`**
-   - clearly general,
-   - self-contained,
-   - useful beyond Crypt4GH.
-
-2. **Allowed-root containment helper patterns** from `crypt4gh_remote_execution.py`
-   - especially if Galaxy wants a shared containment utility for file-sensitive code.
-
-3. **Best-effort purge diagnostic patterns**
-   - classifying concurrent mutation vs permission errors is generally valuable.
-
-#### Medium candidates
-
-4. **Remote-tool-eval failure propagation hardening**
-   - may be extractable if separated from the Crypt4GH-specific finalize script logic.
-
-5. **General pre-success verifier hook pattern**
-   - not the current Crypt4GH verifier itself, but the idea of pluggable datatype- or policy-specific success gates.
-
-#### Probably not worth generalizing first
-
-6. **Discovery integration hooks**
-   - conceptually interesting, but the concrete changes here are still tightly bound to Crypt4GH.
-
-7. **Pulsar command-gating details**
-   - some pieces are general, but the motivating chain shape is specific enough that a generalized PR would need careful reframing.
-
 ### Key corrections and trade-offs during the branch
 
 This branch improved materially, but it also needed a few important corrections on the way.
+
+#### Early runtime model correction: away from `crypt4ghfs`
+
+Problem:
+
+- an earlier mount-style direction added operational complexity and made later runtime control harder to keep local and explicit.
+
+Resolution:
+
+- the branch moved toward direct `crypt4gh` library usage and later remote-evaluation handling instead.
 
 #### Discovery-path encryption bypass
 
@@ -709,9 +819,9 @@ This improved reviewability even though it made history reconstruction more manu
 
 ### Final assessment
 
-For the **non-Pulsar** scope, this branch is in a substantially better state than the branch base.
+For the **non-Pulsar** scope, this branch is no longer just a hardening branch. It is the full Crypt4GH branch history from typed dataset support through runtime redesign and fail-closed hardening.
 
-The key outcomes are summarized in the overview; the deep-dive sections above explain why those outcomes now hold and where the remaining risks still sit.
+The key outcomes are summarized in the overview; the deep-dive sections above explain how the branch evolved from upload support to UI support to remote execution to the final hardening posture.
 
 The main caution is no longer “is this work useful?” but “how should it now be reviewed and split?” The best near-term split candidates are the general object-wrapper fix, any reusable containment or diagnostic helpers, and the isolated Pulsar parity branch.
 
@@ -786,23 +896,28 @@ The demo history exercises the core encryption → analysis → output → recry
 If someone new needs to understand this work quickly, this order should minimize context switching:
 
 1. `CRYPT4GH-HANDOVER.md` (this file)
-2. `crypt4gh-fail-closed-evaluation.md`
+2. `crypt4gh-galaxy-support.md`
 3. `crypt4gh-phase-2-reimplementation-design.md`
-4. `lib/galaxy/tools/crypt4gh_remote_execution.py`
-5. `test/integration/test_crypt4gh_remote_execution.py`
-6. `test/unit/jobs/test_crypt4gh_remote_execution.py`
-7. Pulsar branch diff (`work/pulsar-tail-20260718`) if Pulsar parity matters for the next step
+4. `crypt4gh-phase-2-implementation-plan.md`
+5. `crypt4gh-fail-closed-evaluation.md`
+6. `lib/galaxy/datatypes/binary.py`
+7. `lib/galaxy/tools/crypt4gh_remote_execution.py`
+8. `test/integration/test_crypt4gh_remote_execution.py`
+9. Pulsar branch diff (`work/pulsar-tail-20260718`) if Pulsar parity matters for the next step
 
 Supporting document map:
 
-- `crypt4gh-fail-closed-evaluation.md`
-  - the best current-state document for the gap-by-gap status, mitigations, and residual risks.
-
 - `crypt4gh-galaxy-support.md`
-  - the older support and design document; still useful for historical context, but no longer the best single source for the current fail-closed runtime story.
+  - the best record of the earliest Phase 1 and early Phase 2 goals.
+
+- `crypt4gh-remote-exec-findings.md`
+  - the findings document that explains why the branch moved away from the earlier runtime model.
+
+- `crypt4gh-phase-2-reimplementation-design.md`
+  - the best document for understanding the user-side recryptor A / compute-side recryptor B split and the trust-model redesign.
 
 - `crypt4gh-phase-2-implementation-plan.md`
-  - the approved implementation path, especially the shift toward compute-side recryptor B and remote evaluation.
+  - the approved implementation path for the remote-evaluation redesign.
 
 - `crypt4gh-phase-2-output-enforcement-plan.md`
   - the narrower output-enforcement slice and the reasoning behind discovered-output finalization.
@@ -810,14 +925,11 @@ Supporting document map:
 - `crypt4gh-phase-2-output-enforcement-spec.md`
   - the tighter requirements companion to the output-enforcement plan.
 
-- `crypt4gh-phase-2-reimplementation-design.md`
-  - the best document for understanding the architectural redesign, especially the trust model and the user-side recryptor A / compute-side recryptor B split.
-
-- `crypt4gh-remote-exec-findings.md`
-  - the earlier findings document that explains why `remote_tool_eval.py` became the preferred compute-side hook.
+- `crypt4gh-fail-closed-evaluation.md`
+  - the best current-state document for the later gap-by-gap fail-closed posture.
 
 - `test-data/crypt4gh/MANUAL_TESTING.md`
-  - operator-oriented manual checks and fixture mirroring guidance.
+  - operator-oriented manual checks covering the earlier phases and later runtime flow.
 
 - `test-data/crypt4gh/HANDOFF.md`
   - prior live-smoke and delivery context.
