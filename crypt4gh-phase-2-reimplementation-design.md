@@ -4,7 +4,7 @@
 
 This design supersedes the **Phase 2** and **Phase 3** runtime architecture described in `crypt4gh-galaxy-support.md`.
 
-The earlier design assumed a single external re-encryptor service and let Galaxy-side job preparation author decrypt/encrypt behavior. `crypt4gh-remote-exec-findings.md` invalidates that approach for the desired trust model: sensitive runtime crypto behavior must move to the execution side, and the recryptor concept must be split into a user-side service (**A**) and a compute-side service (**B**).
+The earlier design assumed a single external recryptor service and let Galaxy-side job preparation author decrypt/encrypt behavior. `crypt4gh-remote-exec-findings.md` invalidates that approach for the desired trust model: sensitive runtime crypto behavior must move to the execution side, and the recryptor concept must be split into a user-side service (**A**) and a compute-side service (**B**).
 
 Output-enforcement supersession note: `crypt4gh-phase-2-output-enforcement-spec.md` is now authoritative for output-enforcement semantics. This design remains the binding architecture artifact for the broader phase-2 runtime shape, but the output-enforcement callouts below are retained as historical design text and are out of date wherever they conflict with the newer addendum's dataset-payload-centric selection model, explicit `extra_files` coverage, and universal pre-success fail-closed verifier.
 

@@ -24,9 +24,9 @@ This is analogous to how Galaxy handles compressed datatypes with no auto-decomp
 
 Then, at the tool-level, if a tool accepts `fastqsanger` and `fastqsanger.gz` as input, it should automatically and transparently accept `fastqsanger.c4gh` and `fastqsanger.gz.c4gh` as well — without rewriting tool wrappers.
 
-## Re-encryptor Service Architecture
+## Recryptor Service Architecture
 
-Phase 2 relies on an external **re-encryptor service** (developed and operated by Norwegian partners in the ELIXIR project). This is a vault-like server where:
+Phase 2 relies on an external **recryptor service** (developed and operated by Norwegian partners in the ELIXIR project). This is a vault-like server where:
 
 - Users deposit their Crypt4GH key pair
 - Compute providers deposit their Crypt4GH key pair
@@ -87,8 +87,8 @@ class Crypt4GHDynamicCompressedArchive(DynamicCompressedArchive):
 
 `set_meta` must **not** be a complete no-op. The crypt4gh header is fully readable without any private key — it encodes encrypted session key packets and its structure is public per the spec. The header must be extracted and stored as a `MetadataElement` so that:
 
-- The Phase 2 re-encryptor service call has something to send
-- The Galaxy UI can expose the header to the client-side "re-encrypt" flow (as demonstrated in the ELIXIR branch)
+- The Phase 2 recryptor service call has something to send
+- The Galaxy UI can expose the header to the client-side "recrypt" flow (as demonstrated in the ELIXIR branch)
 
 Parse the header length from bytes 12–15 of the file (4-byte LE uint32), read that many bytes, and store the result (base64-encoded) as a `MetadataElement`. Everything beyond the header is the encrypted body — do **not** scan, index, or validate it.
 
@@ -228,18 +228,18 @@ Generate minimal valid crypt4gh test files using the Python `crypt4gh` library a
 
 ## Phase 2 — Transparent Job-Level Decryption via crypt4ghfs
 
-Phase 2 relies on the external re-encryptor service described above. Galaxy itself never holds any private key.
+Phase 2 relies on the external recryptor service described above. Galaxy itself never holds any private key.
 
-### 12. Re-encryptor service configuration
+### 12. Recryptor service configuration
 
 Add to `galaxy.yml`:
 
 ```yaml
-# URL of the crypt4gh re-encryptor service
+# URL of the crypt4gh recryptor service
 crypt4gh_reencryption_service_url: "https://reencryptor.example.org"
 ```
 
-The re-encryptor service API accepts a crypt4gh header and a target public key, and returns a new header re-encrypted for that recipient. Authentication between Galaxy and the service is out of scope for this plan (handled by the Norwegian partners).
+The recryptor service API accepts a crypt4gh header and a target public key, and returns a new header recrypted for that recipient. Authentication between Galaxy and the service is out of scope for this plan (handled by the Norwegian partners).
 
 ### 13. Per-job header re-encryption utility: `lib/galaxy/jobs/crypt4gh_staging.py`
 
@@ -252,8 +252,8 @@ def prepare_crypt4gh_input(
     reencryption_service_url: str,
 ) -> str:
     """
-    Re-encrypt the crypt4gh header for the compute destination via the
-    re-encryptor service, then write new_header + original_body to a
+    Recrypt the crypt4gh header for the compute destination via the
+    recryptor service, then write new_header + original_body to a
     temporary staged path. Returns the staged file path.
     """
 ```
@@ -262,7 +262,7 @@ The function:
 
 1. Retrieves `dataset.metadata.crypt4gh_header` (base64 → bytes)
 2. Determines the original header length (`struct.unpack_from("<I", header_bytes, 12)[0]`)
-3. POSTs `{header: <base64_header>, recipient_pubkey: <base64_pubkey>}` to the re-encryptor service and receives the new re-encrypted header
+3. POSTs `{header: <base64_header>, recipient_pubkey: <base64_pubkey>}` to the recryptor service and receives the new recrypted header
 4. Opens the original dataset file, seeks past `original_header_length` bytes, and streams `new_header + remaining_bytes` to a temporary staging file
 5. Returns the staged file path
 
@@ -341,9 +341,9 @@ Monitor upstream [EGA-archive/crypt4ghfs](https://github.com/EGA-archive/crypt4g
 | **No auto converters for crypt4gh**           | Decryption requires a secret the Galaxy server never holds; both converter directions are suppressed                                                                                     |
 | **Extension-only inner-type sniffing**        | Unlike gz (which decompresses the prefix to verify the inner format), there is no key available; inner type is inferred from filename extension only                                     |
 | **`matches_any` gating behind config flag**   | Tools don't silently receive encrypted inputs before the staging infrastructure is ready; enabled per deployment                                                                         |
-| **Header stored as metadata, not body**       | The crypt4gh header is key-agnostic (no private key needed to read it); storing it as `MetadataElement` enables the re-encryptor service flow without re-opening the file at job time    |
+| **Header stored as metadata, not body**       | The crypt4gh header is key-agnostic (no private key needed to read it); storing it as `MetadataElement` enables the recryptor service flow without re-opening the file at job time    |
 | **Re-encryption is header-only**              | The crypt4gh design allows header-only re-encryption (fast path for any file size), leveraged for both compute-node staging (Phase 2) and user output encryption (Phase 3)               |
-| **Re-encryptor service, not Galaxy-held key** | Galaxy never holds any user or compute private key; the external re-encryptor service (ELIXIR/Norwegian partners) handles key management                                                 |
+| **Recryptor service, not Galaxy-held key** | Galaxy never holds any user or compute private key; the external recryptor service (ELIXIR/Norwegian partners) handles key management                                                 |
 | **Detection priority**                        | The crypt4gh checker must run **before** gzip/bz2/zip in `get_fileobj_raw`, since a crypt4gh file is raw binary that would otherwise fall through to another format or `binary`          |
 | **`"crypt4gh"` token used consistently**      | Both the XML `auto_compressed_types` token and the class `compressed_format` attribute use exactly `"crypt4gh"`, avoiding the `gz`/`gzip` inconsistency that already exists for gz types |
 
@@ -353,6 +353,6 @@ Monitor upstream [EGA-archive/crypt4ghfs](https://github.com/EGA-archive/crypt4g
 
 - **Phase 1 unit tests**: `pytest test/unit/data/datatypes/` — sniffer, registry, `matches_any` gating, `set_meta` header extraction, no converters registered
 - **Phase 1 API upload test**: upload `.fastqsanger.c4gh`, assert `file_ext`, `metadata.crypt4gh_header` populated, no body metadata errors: `pytest lib/galaxy_test/api/test_tools_upload.py`
-- **Phase 2 integration test**: submit a job with a crypt4gh input on a local runner with a test key pair and a mock re-encryptor service; verify the tool receives plaintext via crypt4ghfs mount
+- **Phase 2 integration test**: submit a job with a crypt4gh input on a local runner with a test key pair and a mock recryptor service; verify the tool receives plaintext via crypt4ghfs mount
 - **Phase 2 `matches_any`**: `fastqsanger.c4gh matches_any([fastqsanger])` = `False` when staging disabled, `True` when enabled
 - **Phase 3 set_meta**: after output re-encryption, verify `metadata.crypt4gh_header` is populated on the output dataset and the dataset can be used as a Phase 2 job input
