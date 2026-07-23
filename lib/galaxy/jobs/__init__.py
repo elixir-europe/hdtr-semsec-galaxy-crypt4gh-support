@@ -1973,9 +1973,15 @@ class MinimalJobWrapper(HasResourceParameters):
                 # Only unhide dataset outputs that are not part of a implicit collection
                 dataset.mark_unhidden()
         elif not purged:
-            # If the tool was expected to set the extension, attempt to retrieve it
+            # If the tool was expected to set the extension, attempt to retrieve it.
+            # Upload jobs can also report a more specific encrypted extension
+            # (for instance fastqsanger.c4gh) even when the user selected an
+            # uncompressed file type. Preserve that encrypted suffix.
             context_ext = context.get("ext", "data")
-            if dataset.ext == "auto" or (dataset.ext == "data" and context_ext != "data"):
+            should_update_extension = dataset.ext == "auto" or (dataset.ext == "data" and context_ext != "data")
+            if not should_update_extension and self.tool and self.tool.id == "upload1":
+                should_update_extension = context_ext.endswith(".c4gh") and dataset.ext != context_ext
+            if should_update_extension:
                 dataset.extension = context_ext
                 dataset.init_meta(copy_from=dataset)
             # if a dataset was copied, it won't appear in our dictionary:
