@@ -182,6 +182,46 @@ class TestMetadata(TestCase, tools_support.UsesTools):
         assert metadata_params["enable_crypt4gh_remote_execution_staging"] is True
         assert metadata_params["crypt4gh_reencryption_service_url"] == "http://127.0.0.1:9999"
 
+    def test_extended_metadata_marks_failed_metadata_when_crypt4gh_clear_set_meta_fails(self):
+        self.app.config.metadata_strategy = "extended"
+
+        source_file_name = os.path.join(galaxy_directory(), "test/functional/tools/for_workflows/cat.xml")
+        self._init_tool_for_path(source_file_name)
+        output_dataset = self._create_output_dataset(extension="fastqsanger.c4gh")
+        output_dataset.state = output_dataset.states.RUNNING
+
+        sa_session = self.app.model.session
+        sa_session.commit()
+
+        output_datasets = {
+            "out_file1": output_dataset,
+        }
+        command = self.metadata_command(output_datasets)
+
+        params_path = os.path.join(self.job_working_directory, "metadata", "params.json")
+        with open(params_path) as f:
+            metadata_params = json.load(f)
+        metadata_params["outputs"]["out_file1"]["clear_crypt4gh_compute_keypair"] = True
+        with open(params_path, "w") as f:
+            json.dump(metadata_params, f)
+
+        self._write_output_dataset_contents(output_dataset, "not-a-crypt4gh-payload\n")
+        self._write_job_files()
+        self.exec_metadata_command(command)
+
+        assert self.metadata_compute_strategy
+        metadata_set_successfully = self.metadata_compute_strategy.external_metadata_set_successfully(
+            output_dataset, "out_file1", sa_session, working_directory=self.job_working_directory
+        )
+        assert metadata_set_successfully is False
+
+        import_model_store = model.store.imported_store_for_metadata(
+            os.path.join(self.job_working_directory, "metadata", "outputs_populated")
+        )
+        imported_dataset = import_model_store.sa_session.query(model.HistoryDatasetAssociation).find(output_dataset.id)
+        assert imported_dataset is not None
+        assert imported_dataset.state in (output_dataset.states.ERROR, output_dataset.states.FAILED_METADATA)
+
     def _create_output_dataset_collection(self, **kwd):
         output_dataset_collection = model.HistoryDatasetCollectionAssociation(**kwd)
         self.history.add_dataset_collection(output_dataset_collection)

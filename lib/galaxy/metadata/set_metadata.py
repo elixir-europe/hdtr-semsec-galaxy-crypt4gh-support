@@ -117,6 +117,7 @@ def set_meta_with_tool_provided(
     set_meta_kwds,
     datatypes_registry,
     max_metadata_value_size,
+    clear_crypt4gh_compute_keypair: bool = False,
 ):
     # This method is somewhat odd, in that we set the metadata attributes from tool,
     # then call set_meta, then set metadata attributes from tool again.
@@ -138,7 +139,14 @@ def set_meta_with_tool_provided(
     for metadata_name, metadata_value in file_dict.get("metadata", {}).items():
         setattr(dataset_instance.metadata, metadata_name, metadata_value)
     if not dataset_instance.metadata_deferred:
-        dataset_instance.datatype.set_meta(dataset_instance, **set_meta_kwds)
+        if clear_crypt4gh_compute_keypair:
+            dataset_instance.datatype.set_meta(
+                dataset_instance,
+                crypt4gh_clear_compute_keypair=True,
+                **set_meta_kwds,
+            )
+        else:
+            dataset_instance.datatype.set_meta(dataset_instance, **set_meta_kwds)
     for metadata_name, metadata_value in file_dict.get("metadata", {}).items():
         setattr(dataset_instance.metadata, metadata_name, metadata_value)
 
@@ -199,7 +207,7 @@ def set_metadata_portable(
 
     tool_provided_metadata = load_job_metadata(job_metadata, provided_metadata_style)
 
-    def set_meta(new_dataset_instance, file_dict):
+    def set_meta(new_dataset_instance, file_dict, clear_crypt4gh_compute_keypair: bool = False):
         if not extended_metadata_collection:
             set_meta_kwds["metadata_tmp_files_dir"] = metadata_tmp_files_dir
         set_meta_with_tool_provided(
@@ -208,6 +216,7 @@ def set_metadata_portable(
             set_meta_kwds,
             datatypes_registry,
             max_metadata_value_size,
+            clear_crypt4gh_compute_keypair=clear_crypt4gh_compute_keypair,
         )
 
     try:
@@ -473,9 +482,7 @@ def set_metadata_portable(
                 setattr(dataset.metadata, metadata_name, metadata_file_override)
             if output_dict.get("validate", False):
                 set_validated_state(dataset)
-
-            if output_dict.get("clear_crypt4gh_compute_keypair", False):
-                dataset.datatype.set_meta(dataset, crypt4gh_clear_compute_keypair=True)
+            clear_crypt4gh_compute_keypair = bool(output_dict.get("clear_crypt4gh_compute_keypair", False))
 
             if extended_metadata_collection:
                 if not object_store or not export_store:
@@ -498,7 +505,11 @@ def set_metadata_portable(
                     # We're going to run through set_metadata in collect_dynamic_outputs with more contextual metadata,
                     # so only run set_meta for fixed outputs
                     if not dataset.dataset.purged:
-                        set_meta(dataset, file_dict)
+                        set_meta(
+                            dataset,
+                            file_dict,
+                            clear_crypt4gh_compute_keypair=clear_crypt4gh_compute_keypair,
+                        )
                 # TODO: merge expression_context into tool_provided_metadata so we don't have to special case this (here and in _finish_dataset)
                 meta = tool_provided_metadata.get_dataset_meta(output_name, dataset.dataset.id, dataset.dataset.uuid)
                 if meta:
@@ -528,12 +539,18 @@ def set_metadata_portable(
                 if dataset_instance_id not in unnamed_id_to_path and not dataset.dataset.purged:
                     # We're going to run through set_metadata in collect_dynamic_outputs with more contextual metadata,
                     # so only run set_meta for fixed outputs
-                    set_meta(dataset, file_dict)
+                    set_meta(
+                        dataset,
+                        file_dict,
+                        clear_crypt4gh_compute_keypair=clear_crypt4gh_compute_keypair,
+                    )
                 dataset.metadata.to_JSON_dict(filename_out)  # write out results of set_meta
 
             with open(filename_results_code, "w+") as tf:
                 json.dump((True, "Metadata has been set successfully"), tf)  # setting metadata has succeeded
         except Exception:
+            if dataset.state not in (dataset.states.ERROR, dataset.states.DEFERRED):
+                dataset.state = dataset.states.FAILED_METADATA
             with open(filename_results_code, "w+") as tf:
                 json.dump((False, traceback.format_exc()), tf)  # setting metadata has failed somehow
         finally:
