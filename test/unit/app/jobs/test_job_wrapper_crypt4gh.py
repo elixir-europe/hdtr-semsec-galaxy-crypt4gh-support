@@ -116,3 +116,22 @@ def test_discover_outputs_and_refresh_associations_returns_new_discovered_associ
     )
 
     assert refreshed_associations == [declared, discovered]
+
+
+def test_should_update_output_extension_from_context_handles_non_string_context_ext_for_upload1():
+    wrapper = JobWrapper.__new__(JobWrapper)
+    wrapper.tool = SimpleNamespace(id="upload1")
+
+    dataset = SimpleNamespace(ext="fastqsanger")
+
+    assert wrapper._should_update_output_extension_from_context(dataset, None) is False
+    assert wrapper._should_update_output_extension_from_context(dataset, 123) is False
+
+
+def test_should_update_output_extension_from_context_allows_crypt4gh_suffix_for_upload1():
+    wrapper = JobWrapper.__new__(JobWrapper)
+    wrapper.tool = SimpleNamespace(id="upload1")
+
+    dataset = SimpleNamespace(ext="fastqsanger")
+
+    assert wrapper._should_update_output_extension_from_context(dataset, "fastqsanger.c4gh") is True

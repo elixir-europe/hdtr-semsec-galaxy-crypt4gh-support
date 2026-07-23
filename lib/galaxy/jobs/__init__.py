@@ -1978,9 +1978,7 @@ class MinimalJobWrapper(HasResourceParameters):
             # (for instance fastqsanger.c4gh) even when the user selected an
             # uncompressed file type. Preserve that encrypted suffix.
             context_ext = context.get("ext", "data")
-            should_update_extension = dataset.ext == "auto" or (dataset.ext == "data" and context_ext != "data")
-            if not should_update_extension and self.tool and self.tool.id == "upload1":
-                should_update_extension = context_ext.endswith(".c4gh") and dataset.ext != context_ext
+            should_update_extension = self._should_update_output_extension_from_context(dataset, context_ext)
             if should_update_extension:
                 dataset.extension = context_ext
                 dataset.init_meta(copy_from=dataset)
@@ -2035,6 +2033,14 @@ class MinimalJobWrapper(HasResourceParameters):
                 setattr(dataset, context_key, context_value)
 
         self.sa_session.add(dataset)
+
+    def _should_update_output_extension_from_context(self, dataset: "DatasetInstance", context_ext: Any) -> bool:
+        should_update_extension = dataset.ext == "auto" or (dataset.ext == "data" and context_ext != "data")
+        if not should_update_extension and self.tool and self.tool.id == "upload1":
+            should_update_extension = (
+                isinstance(context_ext, str) and context_ext.endswith(".c4gh") and dataset.ext != context_ext
+            )
+        return should_update_extension
 
     def _apply_crypt4gh_marked_extensions(self, job: Job, output_dataset_associations) -> None:
         """Apply encrypted extensions from marker files for all output dataset instances.
