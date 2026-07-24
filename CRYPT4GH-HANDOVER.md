@@ -29,8 +29,8 @@ That history demonstrates several rounds of analysis and recrypt, not just a sin
 ### Repositories and branch references
 
 - **Galaxy support repo:** [elixir-europe/hdtr-semsec-galaxy-crypt4gh-support](https://github.com/elixir-europe/hdtr-semsec-galaxy-crypt4gh-support)
-  - primary branch for this handover: `explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
-  - related follow-up branches/worktrees: `work/pulsar-tail-20260718`, `work/fix-remote-tool-eval-python-fail-closed`
+  - primary branch on GitHub for this handover: `crypt4gh-support-from-26.0`
+  - related follow-up branches/worktrees: `crypt4gh-support-from-26.0-pulsar`, `work/fix-remote-tool-eval-python-fail-closed`
 - **Recryptor repo:** [elixir-europe/crypt4gh-recryptor-service](https://github.com/elixir-europe/crypt4gh-recryptor-service)
   - recryptor route-work branch/worktree used during this effort: `work/phase2-recryptor-routes`
 
@@ -572,13 +572,13 @@ Why this phase mattered:
 
 #### Primary branch
 
-- `explore-crypt4gh-library-support-merged-with-is-recryptor-from-26.0`
+- `crypt4gh-support-from-26.0`
 
 This branch contains the full non-Pulsar Crypt4GH story from datatype support through runtime tightening.
 
 #### Pulsar follow-up branch
 
-- `work/pulsar-tail-20260718`
+- `crypt4gh-support-from-26.0-pulsar`
 
 This separate branch/worktree contains the Pulsar-specific command assembly fixes and parity tests that were intentionally extracted from the main line of work.
 
@@ -692,7 +692,9 @@ Important integrated behaviors called out explicitly:
 6. Consider whether TTL floor configuration should be more operator-friendly.
 7. Generalize the browser-side UI recrypt endpoint so it is configurable instead of hard-coded to `https://localhost:61357/recrypt_header`.
 8. Add client-side visualization of encrypted datasets through interaction with recryptor A.
-9. If desired, split out the object-wrapper fix into a general PR.
+9. Decide how to support workflows and intermediate recryption semantics. Current output return recrypts to the user key context, which makes outputs readable to the user but not directly ready to launch new compute jobs. Recrypting only to compute context has the opposite tradeoff. A next step is to evaluate whether Crypt4GH outputs should be recrypted to both user and compute contexts simultaneously so workflow-style chaining or direct reruns can work without an extra explicit UI recrypt step, while still reviewing the security implications carefully.
+10. Expand upload support so any datatype modified as a Crypt4GH file type can be ingested cleanly, not only the currently explicit supported set.
+11. If desired, split out the object-wrapper fix into a general PR.
 
 ### Final assessment
 
