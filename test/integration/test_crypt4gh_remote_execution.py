@@ -679,10 +679,12 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         dataset_id = sample_hda.dataset.id
         assert dataset_id is not None
         extra_files_path = Path(sample_hda.dataset.extra_files_path)
-        with (extra_files_path / "foo").open("rb") as extra_stream:
+        with (extra_files_path / "foo.c4gh").open("rb") as extra_stream:
             assert extra_stream.read(8) == b"crypt4gh"
-        with (extra_files_path / "bar").open("rb") as extra_stream:
+        with (extra_files_path / "bar.c4gh").open("rb") as extra_stream:
             assert extra_stream.read(8) == b"crypt4gh"
+        assert not (extra_files_path / "foo").exists()
+        assert not (extra_files_path / "bar").exists()
 
         job_database_id = self._app.security.decode_id(job_api_id)
         job = sa_session.get(model.Job, job_database_id)
@@ -699,7 +701,7 @@ class TestCrypt4GHRemoteExecutionIntegration(integration_util.IntegrationTestCas
         )
         assert manifest_path.exists(), manifest_path
         manifest_payload = json.loads(manifest_path.read_text())
-        assert sorted(manifest_payload["files"].keys()) == ["bar", "foo"]
+        assert sorted(manifest_payload["files"].keys()) == ["bar.c4gh", "foo.c4gh"]
 
         designation_map_path = marker_dir / "discovered_designations.json"
         assert designation_map_path.exists(), designation_map_path

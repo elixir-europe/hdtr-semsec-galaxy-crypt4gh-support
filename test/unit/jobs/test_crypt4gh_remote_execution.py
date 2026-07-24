@@ -1891,13 +1891,15 @@ def test_finalize_declared_outputs_encrypts_extra_files_and_writes_manifest(tmp_
     with output_path.open("rb") as output_stream:
         assert output_stream.read(8) == b"crypt4gh"
 
-    with (extra_files_root / "foo.txt").open("rb") as extra_stream:
+    with (extra_files_root / "foo.txt.c4gh").open("rb") as extra_stream:
         assert extra_stream.read(8) == b"crypt4gh"
-    with (extra_files_root / "nested" / "bar.txt").open("rb") as extra_stream:
+    with (extra_files_root / "nested" / "bar.txt.c4gh").open("rb") as extra_stream:
         assert extra_stream.read(8) == b"crypt4gh"
+    assert not (extra_files_root / "foo.txt").exists()
+    assert not (extra_files_root / "nested" / "bar.txt").exists()
 
     manifest_payload = json.loads(manifest_path.read_text())
-    assert sorted(manifest_payload["files"].keys()) == ["foo.txt", "nested/bar.txt"]
+    assert sorted(manifest_payload["files"].keys()) == ["foo.txt.c4gh", "nested/bar.txt.c4gh"]
 
 
 def test_finalize_declared_outputs_fail_closed_when_extra_files_manifest_missing_entries(tmp_path, monkeypatch):
@@ -2264,7 +2266,7 @@ def test_pre_success_verifier_fails_for_plaintext_extra_files_payload_even_when_
     marker_dir.mkdir(parents=True, exist_ok=True)
     (marker_dir / "ds_52.encrypted").write_text("tabular.c4gh\n")
     (marker_dir / "ds_52.extra_files_manifest.json").write_text(
-        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+        json.dumps({"files": {"foo.txt.c4gh": "tabular.c4gh"}})
     )
 
     dataset_path = tmp_path / "objects" / "dataset_52.dat"
@@ -2273,7 +2275,7 @@ def test_pre_success_verifier_fails_for_plaintext_extra_files_payload_even_when_
 
     extra_files_path = tmp_path / "objects" / "dataset_52_files"
     extra_files_path.mkdir(parents=True, exist_ok=True)
-    (extra_files_path / "foo.txt").write_bytes(b"PLAINTEXT")
+    (extra_files_path / "foo.txt.c4gh").write_bytes(b"PLAINTEXT")
 
     class _DatasetObject:
         def __init__(self, dataset_id: int, file_name: str):
@@ -2303,20 +2305,20 @@ def test_pre_success_verifier_fails_for_symlinked_extra_files_payload_even_when_
     marker_dir.mkdir(parents=True, exist_ok=True)
     (marker_dir / "ds_53.encrypted").write_text("tabular.c4gh\n")
     (marker_dir / "ds_53.extra_files_manifest.json").write_text(
-        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+        json.dumps({"files": {"foo.txt.c4gh": "tabular.c4gh"}})
     )
 
     dataset_path = tmp_path / "objects" / "dataset_53.dat"
     dataset_path.parent.mkdir(parents=True, exist_ok=True)
     dataset_path.write_bytes(b"crypt4ghpayload")
 
-    outside_payload_path = tmp_path / "outside" / "foo.txt"
+    outside_payload_path = tmp_path / "outside" / "foo.txt.c4gh"
     outside_payload_path.parent.mkdir(parents=True, exist_ok=True)
     outside_payload_path.write_bytes(b"crypt4ghoutside")
 
     extra_files_path = tmp_path / "objects" / "dataset_53_files"
     extra_files_path.mkdir(parents=True, exist_ok=True)
-    (extra_files_path / "foo.txt").symlink_to(outside_payload_path)
+    (extra_files_path / "foo.txt.c4gh").symlink_to(outside_payload_path)
 
     class _DatasetObject:
         def __init__(self, dataset_id: int, file_name: str):
@@ -2346,7 +2348,7 @@ def test_pre_success_verifier_fails_for_missing_extra_files_payload_when_manifes
     marker_dir.mkdir(parents=True, exist_ok=True)
     (marker_dir / "ds_54.encrypted").write_text("tabular.c4gh\n")
     (marker_dir / "ds_54.extra_files_manifest.json").write_text(
-        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+        json.dumps({"files": {"foo.txt.c4gh": "tabular.c4gh"}})
     )
 
     dataset_path = tmp_path / "objects" / "dataset_54.dat"
@@ -2384,7 +2386,7 @@ def test_pre_success_verifier_fails_for_unreadable_extra_files_payload_under_sca
     marker_dir.mkdir(parents=True, exist_ok=True)
     (marker_dir / "ds_55.encrypted").write_text("tabular.c4gh\n")
     (marker_dir / "ds_55.extra_files_manifest.json").write_text(
-        json.dumps({"files": {"foo.txt": "tabular.c4gh"}})
+        json.dumps({"files": {"foo.txt.c4gh": "tabular.c4gh"}})
     )
 
     dataset_path = tmp_path / "objects" / "dataset_55.dat"
@@ -2393,7 +2395,7 @@ def test_pre_success_verifier_fails_for_unreadable_extra_files_payload_under_sca
 
     extra_files_path = tmp_path / "objects" / "dataset_55_files"
     extra_files_path.mkdir(parents=True, exist_ok=True)
-    payload_path = extra_files_path / "foo.txt"
+    payload_path = extra_files_path / "foo.txt.c4gh"
     payload_path.write_bytes(b"crypt4ghpayload")
 
     def _scan_race_walk(_path, *args, **kwargs):
@@ -2551,7 +2553,7 @@ def test_pre_success_verifier_accepts_designation_extra_files_manifest_for_disco
     (marker_dir / "ds_81.encrypted").write_text("tabular.c4gh\n")
     (marker_dir / "discovered_designations.json").write_text(json.dumps({"sample1": "tabular.c4gh"}))
     (marker_dir / "designation_sample1.extra_files_manifest.json").write_text(
-        json.dumps({"files": {"child.txt": "tabular.c4gh"}})
+        json.dumps({"files": {"child.txt.c4gh": "tabular.c4gh"}})
     )
 
     dataset_path = tmp_path / "objects" / "dataset_81.dat"
@@ -2560,7 +2562,7 @@ def test_pre_success_verifier_accepts_designation_extra_files_manifest_for_disco
 
     extra_files_path = tmp_path / "objects" / "dataset_81_files"
     extra_files_path.mkdir(parents=True, exist_ok=True)
-    (extra_files_path / "child.txt").write_bytes(b"crypt4ghextra")
+    (extra_files_path / "child.txt.c4gh").write_bytes(b"crypt4ghextra")
 
     class _DatasetObject:
         def __init__(self, dataset_id: int, file_name: str):

@@ -225,6 +225,7 @@ class Crypt4GHRemoteExecutionError(Exception):
 CRYPT4GH_PLAINTEXT_CLEANUP_FAILED_MARKER = "CRYPT4GH_PLAINTEXT_CLEANUP_FAILED"
 _DEFAULT_MINIMUM_TTL = timedelta(days=1)
 _DESTINATION_WALLTIME_BUFFER = timedelta(hours=1)
+_CRYPT4GH_FILE_SUFFIX = ".c4gh"
 
 
 class _HeaderThenBodyStream:
@@ -1630,12 +1631,12 @@ def _finalize_extra_files_payloads(
             source_path = root_path / file_name
             relative_path = os.path.relpath(source_path, extra_files_output_path)
             normalized_relative_path = relative_path.replace(os.sep, "/")
-            expected_entries.add(normalized_relative_path)
+            encrypted_relative_path = _encrypted_extra_files_relative_path(relative_path=normalized_relative_path)
 
             extra_file_target = dict(concrete_target)
             extra_file_target["output_path"] = str(source_path)
             extra_file_target["plaintext_path"] = str(
-                base_plaintext_path.parent / "extra_files" / normalized_relative_path / "plaintext"
+                base_plaintext_path.parent / "extra_files" / encrypted_relative_path / "plaintext"
             )
             extra_file_target["encrypted_marker_path"] = ""
             extra_file_target.pop("dataset_output_path", None)
@@ -1646,19 +1647,29 @@ def _finalize_extra_files_payloads(
                 context="finalize extra_files payload",
             )
 
+            payload_path = _rename_extra_files_payload_with_suffix_if_needed(
+                source_path=source_path,
+                extra_files_root=extra_files_output_path,
+                encrypted_relative_path=encrypted_relative_path,
+                allowed_root_paths=allowed_roots,
+            )
+            expected_entries.add(encrypted_relative_path)
+
+            extra_file_target["output_path"] = str(payload_path)
+
             _finalize_output_target(
                 concrete_target=extra_file_target,
-                output_path=source_path,
+                output_path=payload_path,
                 reencryption_service_url=reencryption_service_url,
                 compute_public_key=compute_public_key,
                 compute_keypair_id=compute_keypair_id,
             )
             _write_extra_files_manifest_entry(
                 manifest_path=extra_files_manifest_path,
-                relative_path=normalized_relative_path,
+                relative_path=encrypted_relative_path,
                 encrypted_ext=str(concrete_target["encrypted_ext"]),
             )
-            _assert_crypt4gh_payload_header(path=source_path)
+            _assert_crypt4gh_payload_header(path=payload_path)
 
     _assert_extra_files_manifest_complete(
         manifest_path=extra_files_manifest_path,
@@ -1684,6 +1695,38 @@ def _write_extra_files_manifest_entry(*, manifest_path: Path, relative_path: str
 
     files_payload[relative_path] = encrypted_ext
     manifest_path.write_text(json.dumps(manifest_payload))
+
+
+def _encrypted_extra_files_relative_path(*, relative_path: str) -> str:
+    if relative_path.endswith(_CRYPT4GH_FILE_SUFFIX):
+        return relative_path
+    return f"{relative_path}{_CRYPT4GH_FILE_SUFFIX}"
+
+
+def _rename_extra_files_payload_with_suffix_if_needed(
+    *,
+    source_path: Path,
+    extra_files_root: Path,
+    encrypted_relative_path: str,
+    allowed_root_paths: Sequence[Path],
+) -> Path:
+    encrypted_path = extra_files_root / encrypted_relative_path
+    if encrypted_path == source_path:
+        return source_path
+
+    _assert_path_within_allowed_roots(
+        encrypted_path,
+        allowed_root_paths=allowed_root_paths,
+        context="finalize extra_files encrypted payload",
+    )
+    if encrypted_path.exists():
+        raise Crypt4GHRemoteExecutionError(
+            f"Crypt4GH extra_files encrypted payload already exists: {encrypted_path}"
+        )
+
+    encrypted_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.rename(encrypted_path)
+    return encrypted_path
 
 
 def _assert_extra_files_manifest_complete(*, manifest_path: Path, expected_entries: set[str]) -> None:
