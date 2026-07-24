@@ -592,7 +592,19 @@ The added parity tests are useful, but they are still mostly command-shape asser
 
 #### Other already-existing related branch
 
-- `work/fix-remote-tool-eval-python-fail-closed`
+- `env_galaxy_for_remote_eval`
+
+### Upstream Galaxy PRs related to this work
+
+- `env_galaxy_for_remote_eval` was the basis for an upstream Galaxy PR that was merged:
+  - [galaxyproject/galaxy#23159](https://github.com/galaxyproject/galaxy/pull/23159)
+- Another upstream PR was created:
+  - [galaxyproject/galaxy#23160](https://github.com/galaxyproject/galaxy/pull/23160)
+  - however, this later turned out to be an error in the Crypt4GH branch rather than an upstream Galaxy defect.
+- Reviewer follow-up note from that discussion:
+  - the Crypt4GH branch carries a second fix that was not upstreamed there: it sets `outdata.state = OK` in `collect_primary_datasets` when a primary output is assigned.
+  - treat that as a possible future upstream PR follow-up if the behavior is confirmed to be general rather than Crypt4GH-specific.
+- This codebase has **not** been thoroughly searched for all potential non-Crypt4GH-specific upstream PR candidates.
 
 ### Key code surfaces by capability
 
@@ -694,7 +706,8 @@ Important integrated behaviors called out explicitly:
 8. Add client-side visualization of encrypted datasets through interaction with recryptor A.
 9. Decide how to support workflows and intermediate recryption semantics. Current output return recrypts to the user key context, which makes outputs readable to the user but not directly ready to launch new compute jobs. Recrypting only to compute context has the opposite tradeoff. A next step is to evaluate whether Crypt4GH outputs should be recrypted to both user and compute contexts simultaneously so workflow-style chaining or direct reruns can work without an extra explicit UI recrypt step, while still reviewing the security implications carefully.
 10. Expand upload support so any datatype modified as a Crypt4GH file type can be ingested cleanly, not only the currently explicit supported set.
-11. If desired, split out the object-wrapper fix into a general PR.
+11. Search more systematically for how to break the branch up into relevant Crypt4GH-specific PRs and general upstream-worthy PRs.
+12. If desired, split out the object-wrapper fix into a general PR.
 
 ### Final assessment
 
