@@ -30,7 +30,7 @@ That history demonstrates several rounds of analysis and recrypt, not just a sin
 
 - **Galaxy support repo:** [elixir-europe/hdtr-semsec-galaxy-crypt4gh-support](https://github.com/elixir-europe/hdtr-semsec-galaxy-crypt4gh-support)
   - primary branch on GitHub for this handover: `crypt4gh-support-from-26.0`
-  - related follow-up branches/worktrees: `crypt4gh-support-from-26.0-pulsar`, `work/fix-remote-tool-eval-python-fail-closed`
+  - related follow-up branches/worktrees: `crypt4gh-support-from-26.0-pulsar`, `env_galaxy_for_remote_eval`
 - **Recryptor repo:** [elixir-europe/crypt4gh-recryptor-service](https://github.com/elixir-europe/crypt4gh-recryptor-service)
   - recryptor route-work branch/worktree used during this effort: `work/phase2-recryptor-routes`
 
